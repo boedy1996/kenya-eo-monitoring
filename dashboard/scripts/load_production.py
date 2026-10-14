@@ -14,7 +14,7 @@ import json
 import os
 import tempfile
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -415,7 +415,7 @@ def activate_run(
 ) -> None:
     metadata = {
         "loader": "dashboard/scripts/load_production.py",
-        "loaded_at": datetime.now(UTC).isoformat(),
+        "loaded_at": datetime.now(timezone.utc).isoformat(),
         "source_file_count": len(files),
         "source_statistics": {key: str(value) for key, value in stats.items()},
     }

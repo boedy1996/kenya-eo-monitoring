@@ -16,7 +16,7 @@ import re
 import shlex
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -367,7 +367,7 @@ def main() -> None:
 
     manifest = {
         "bundle_id": args.seed,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "model_run_id": args.model_run_id,
         "source_path": str(args.model_output_root),
         "date_from": args.date_from,
