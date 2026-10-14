@@ -1,0 +1,4 @@
+duckdb==1.4.0
+geopandas==1.0.1
+pyarrow==18.1.0
+pyogrio==0.12.1

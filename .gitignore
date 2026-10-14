@@ -56,6 +56,15 @@ env/
 credentials*
 secrets*
 .env.*
+!dashboard/api/.env.example
+!dashboard/deploy/*.env.example
+
+# Dashboard development data and frontend build outputs
+dashboard/data/
+dashboard/web/node_modules/
+dashboard/web/dist/
+dashboard/web/*.tsbuildinfo
+dashboard/api/.env
 
 # ============================================================
 # OS/editor files
