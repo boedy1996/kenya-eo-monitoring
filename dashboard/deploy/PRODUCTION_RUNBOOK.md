@@ -75,8 +75,11 @@ id kenya_dashboard >/dev/null 2>&1 || \
 
 ln -sfn "/opt/kenya-dashboard/releases/${RELEASE_ID}" /opt/kenya-dashboard/current
 
+apt-get update
+apt-get install -y python3-venv
+
 if [ ! -x /opt/kenya-dashboard/venv/bin/python ]; then
-  /root/.pyenv/versions/3.12.0/bin/python -m venv --copies /opt/kenya-dashboard/venv
+  /usr/bin/python3 -m venv /opt/kenya-dashboard/venv
 fi
 
 /opt/kenya-dashboard/venv/bin/pip install --upgrade pip
