@@ -37,6 +37,12 @@ def database_url() -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-run-id")
+    parser.add_argument(
+        "--season-code",
+        action="append",
+        dest="season_codes",
+        help="Build only this season code; repeat for multiple seasons",
+    )
     parser.add_argument("--minimum-classified-weeks", type=int, default=3)
     parser.add_argument("--near-tie", type=float, default=0.05)
     parser.add_argument("--median-tie", type=float, default=0.01)
@@ -45,6 +51,11 @@ def parse_args() -> argparse.Namespace:
         "--work-mem",
         default="512MB",
         help="PostgreSQL work_mem for this builder session only (default: 512MB)",
+    )
+    parser.add_argument(
+        "--skip-summary",
+        action="store_true",
+        help="Skip the shared summary rebuild when several builders run in parallel",
     )
     parser.add_argument("--rebuild", action="store_true")
     return parser.parse_args()
@@ -233,7 +244,15 @@ def main() -> None:
         if not run:
             raise RuntimeError("Dashboard model run not found")
 
-        seasons = seasons_between(run["date_from"], run["date_to"])
+        all_seasons = seasons_between(run["date_from"], run["date_to"])
+        seasons = all_seasons
+        if args.season_codes:
+            requested = set(args.season_codes)
+            known = {season.code for season in all_seasons}
+            unknown = sorted(requested - known)
+            if unknown:
+                raise ValueError(f"Unknown season code(s): {', '.join(unknown)}")
+            seasons = [season for season in all_seasons if season.code in requested]
         log(
             f"Building {len(seasons)} seasons for {run['model_run_id']} "
             f"({run['field_count']:,} fields)"
@@ -327,6 +346,10 @@ def main() -> None:
                 f"[{number}/{len(seasons)}] built {row_count:,} rows for {season.code} "
                 f"in {time.monotonic() - started:.1f}s"
             )
+
+        if args.skip_summary:
+            log("Seasonal prediction rows complete; summary rebuild skipped")
+            return
 
         log("Rebuilding seasonal summary")
         with conn.transaction():

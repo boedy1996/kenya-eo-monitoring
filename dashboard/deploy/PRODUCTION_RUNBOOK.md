@@ -268,6 +268,9 @@ nginx -t && systemctl reload nginx
 The seasonal builder reads the existing weekly prediction table. It does not
 rerun the crop model or the Sentinel processing. Each completed season is
 committed and checkpointed independently, so the same command resumes safely.
+The default command uses one worker. `--season-code` and `--skip-summary` are
+available when an operator intentionally assigns disjoint seasons to parallel
+workers; run the default command once afterward to rebuild the shared summary.
 
 Pull the dashboard branch and apply the new schema before starting the build:
 
