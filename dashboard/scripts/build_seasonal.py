@@ -83,27 +83,39 @@ field_totals AS MATERIALIZED (
     GROUP BY field_id
 ),
 eligible AS MATERIALIZED (
-    SELECT field_id, county, week_start, label, confidence,
-           row_number() OVER (
-               PARTITION BY field_id, label
-               ORDER BY confidence DESC, week_start
-           ) AS confidence_rank
+    SELECT field_id, county, label, confidence
     FROM season_rows
     WHERE scorable
       AND reason = 'classified'
       AND label IN ('maize', 'beans', 'potatoes')
       AND confidence IS NOT NULL
 ),
-crop_stats AS MATERIALIZED (
+crop_values AS MATERIALIZED (
     SELECT field_id,
            max(county) AS county,
            label,
            count(*)::smallint AS appearance_count,
-           avg(confidence) FILTER (WHERE confidence_rank <= 3) AS top3_confidence,
-           percentile_cont(0.5) WITHIN GROUP (ORDER BY confidence) AS median_confidence,
-           max(confidence) AS maximum_confidence
+           array_agg(confidence ORDER BY confidence DESC) AS confidence_values
     FROM eligible
     GROUP BY field_id, label
+),
+crop_stats AS MATERIALIZED (
+    SELECT field_id,
+           county,
+           label,
+           appearance_count,
+           (SELECT avg(value) FROM unnest(confidence_values[1:3]) AS value)
+               AS top3_confidence,
+           CASE
+               WHEN appearance_count %% 2 = 1
+                   THEN confidence_values[(appearance_count + 1) / 2]
+               ELSE (
+                   confidence_values[appearance_count / 2]
+                   + confidence_values[appearance_count / 2 + 1]
+               ) / 2.0
+           END AS median_confidence,
+           confidence_values[1] AS maximum_confidence
+    FROM crop_values
 ),
 strength AS MATERIALIZED (
     SELECT crop_stats.*,
