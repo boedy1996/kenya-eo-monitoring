@@ -48,7 +48,7 @@ button { cursor: pointer; }
 .map-toolbar > div:first-child { padding: 10px 13px; background: rgb(255 255 255 / 92%); border: 1px solid rgb(220 225 219 / 90%); border-radius: 8px; box-shadow: 0 5px 18px rgb(25 44 33 / 10%); backdrop-filter: blur(8px); }
 .map-toolbar strong { display: block; margin-top: 2px; font-size: 14px; }
 .eyebrow { color: #738078; font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-.field-search { position: relative; width: 220px; pointer-events: auto; }
+.field-search { position: relative; width: 220px; pointer-events: auto; transform: translateY(62px); }
 .field-search input { background: rgb(255 255 255 / 94%); box-shadow: 0 5px 18px rgb(25 44 33 / 10%); }
 .search-results { position: absolute; top: 43px; width: 100%; max-height: 260px; overflow: auto; padding: 5px; background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 28px rgb(20 38 28 / 16%); }
 .search-results button { width: 100%; display: flex; justify-content: space-between; padding: 9px; background: transparent; border: 0; border-radius: 5px; text-align: left; }
@@ -56,7 +56,7 @@ button { cursor: pointer; }
 .search-results span { color: var(--muted); font-size: 11px; }
 .map-shell, .map { position: absolute; inset: 0; }
 .map-grid { position: absolute; inset: 0; opacity: .35; background-image: linear-gradient(#dfe5dc 1px, transparent 1px), linear-gradient(90deg, #dfe5dc 1px, transparent 1px); background-size: 32px 32px; }
-.basemap-picker { position: absolute; z-index: 4; top: 74px; right: 15px; min-width: 190px; padding: 8px 10px; background: rgb(255 255 255 / 94%); border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 5px 18px rgb(25 44 33 / 10%); backdrop-filter: blur(8px); }
+.basemap-picker { position: absolute; z-index: 4; top: 132px; right: 15px; min-width: 190px; padding: 8px 10px; background: rgb(255 255 255 / 94%); border: 1px solid var(--line); border-radius: 7px; box-shadow: 0 5px 18px rgb(25 44 33 / 10%); backdrop-filter: blur(8px); }
 .basemap-picker span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .basemap-picker select { width: 100%; color: var(--ink); background: transparent; border: 0; outline: none; font-size: 11px; }
 .basemap-picker small { display: block; margin-top: 5px; color: #a84736; font-size: 9px; }
