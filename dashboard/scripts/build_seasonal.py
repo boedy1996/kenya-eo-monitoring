@@ -74,29 +74,12 @@ def seasons_between(date_from: date, date_to: date) -> list[Season]:
 
 
 INSERT_SEASON_SQL = """
-WITH season_rows AS MATERIALIZED (
-    SELECT field_id, county, week_start, label, confidence, scorable, reason
+WITH eligible AS MATERIALIZED (
+    SELECT field_id, county, label, confidence
     FROM dashboard.crop_predictions
     WHERE model_run_id = %(run)s
       AND week_start BETWEEN %(start)s AND %(end)s
-),
-field_totals AS MATERIALIZED (
-    SELECT field_id,
-           max(county) AS county,
-           count(*)::smallint AS total_weeks,
-           count(*) FILTER (
-               WHERE scorable
-                 AND reason = 'classified'
-                 AND label IN ('maize', 'beans', 'potatoes')
-                 AND confidence IS NOT NULL
-           )::smallint AS classified_weeks
-    FROM season_rows
-    GROUP BY field_id
-),
-eligible AS MATERIALIZED (
-    SELECT field_id, county, label, confidence
-    FROM season_rows
-    WHERE scorable
+      AND scorable
       AND reason = 'classified'
       AND label IN ('maize', 'beans', 'potatoes')
       AND confidence IS NOT NULL
@@ -130,6 +113,12 @@ crop_stats AS MATERIALIZED (
            END AS median_confidence,
            confidence_values[1] AS maximum_confidence
     FROM crop_values
+),
+field_stats AS MATERIALIZED (
+    SELECT field_id,
+           sum(appearance_count)::smallint AS classified_weeks
+    FROM crop_values
+    GROUP BY field_id
 ),
 strength AS MATERIALIZED (
     SELECT crop_stats.*,
@@ -181,43 +170,44 @@ INSERT INTO dashboard.seasonal_predictions (
     runner_up_label, runner_up_confidence, confidence_margin, method_version
 )
 SELECT %(run)s,
-       totals.field_id,
-       totals.county,
+       fields.field_id,
+       fields.county,
        %(season_code)s,
        %(season_year)s,
        %(season_kind)s,
        %(start)s,
        %(end)s,
        CASE
-           WHEN totals.classified_weeks < %(minimum_weeks)s OR winner.field_id IS NULL
+           WHEN coalesce(stats.classified_weeks, 0) < %(minimum_weeks)s OR winner.field_id IS NULL
                THEN 'Unclassified'
            WHEN winner.is_ambiguous THEN 'Unclassified'
            ELSE winner.leading_label
        END,
        winner.leading_label,
        CASE
-           WHEN totals.classified_weeks < %(minimum_weeks)s OR winner.is_ambiguous
+           WHEN coalesce(stats.classified_weeks, 0) < %(minimum_weeks)s OR winner.is_ambiguous
                THEN NULL
            ELSE winner.top3_confidence
        END,
        CASE
-           WHEN totals.classified_weeks < %(minimum_weeks)s OR winner.field_id IS NULL
+           WHEN coalesce(stats.classified_weeks, 0) < %(minimum_weeks)s OR winner.field_id IS NULL
                THEN 'insufficient_data'
            WHEN winner.is_ambiguous THEN 'ambiguous'
            WHEN %(end)s > %(model_date_to)s THEN 'provisional'
            ELSE 'final'
        END,
-       totals.total_weeks,
-       totals.classified_weeks,
+       %(total_weeks)s,
+       coalesce(stats.classified_weeks, 0),
        winner.appearance_count,
-       winner.appearance_count::double precision / NULLIF(totals.classified_weeks, 0),
+       winner.appearance_count::double precision / NULLIF(stats.classified_weeks, 0),
        winner.median_confidence,
        winner.maximum_confidence,
        winner.runner_up_label,
        winner.runner_up_confidence,
        winner.confidence_margin,
        %(method_version)s
-FROM field_totals AS totals
+FROM dashboard.fields AS fields
+LEFT JOIN field_stats AS stats USING (field_id)
 LEFT JOIN winner USING (field_id)
 """
 
@@ -280,6 +270,17 @@ def main() -> None:
 
             started = time.monotonic()
             log(f"[{number}/{len(seasons)}] building {season.code}")
+            total_weeks = conn.execute(
+                """
+                SELECT count(DISTINCT week_start)::smallint AS total_weeks
+                FROM dashboard.prediction_week_summary
+                WHERE model_run_id = %s
+                  AND week_start BETWEEN %s AND %s
+                """,
+                (run["model_run_id"], season.start, season.end),
+            ).fetchone()["total_weeks"]
+            if not total_weeks:
+                raise RuntimeError(f"{season.code} contains no prediction weeks")
             params = {
                 "run": run["model_run_id"],
                 "season_code": season.code,
@@ -288,6 +289,7 @@ def main() -> None:
                 "start": season.start,
                 "end": season.end,
                 "model_date_to": run["date_to"],
+                "total_weeks": total_weeks,
                 "minimum_weeks": args.minimum_classified_weeks,
                 "near_tie": args.near_tie,
                 "median_tie": args.median_tie,
