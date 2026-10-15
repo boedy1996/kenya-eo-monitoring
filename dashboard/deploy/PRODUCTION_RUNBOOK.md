@@ -262,3 +262,64 @@ ln -sfn /opt/kenya-dashboard/releases/PREVIOUS_RELEASE /opt/kenya-dashboard/curr
 systemctl restart kenya-dashboard-api
 nginx -t && systemctl reload nginx
 ```
+
+## 10. Add or rebuild the seasonal view
+
+The seasonal builder reads the existing weekly prediction table. It does not
+rerun the crop model or the Sentinel processing. Each completed season is
+committed and checkpointed independently, so the same command resumes safely.
+
+Pull the dashboard branch and apply the new schema before starting the build:
+
+```bash
+cd /opt/kenya-dashboard/current
+git pull --ff-only origin dashboard-production
+
+sudo -u postgres env \
+  DATABASE_URL='postgresql:///kenya_monitoring?host=/var/run/postgresql' \
+  /opt/kenya-dashboard/venv/bin/python \
+  /opt/kenya-dashboard/current/dashboard/scripts/migrate.py
+```
+
+Build all Long Rains and Short Rains seasons for the active model run:
+
+```bash
+export RUN_ID=kenya_v3_all_fields_20261014
+export SEASONAL_LOG="/var/log/kenya-dashboard-seasonal-${RUN_ID}.log"
+
+sudo -u postgres env \
+  DATABASE_URL='postgresql:///kenya_monitoring?host=/var/run/postgresql' \
+  nohup /opt/kenya-dashboard/venv/bin/python \
+  /opt/kenya-dashboard/current/dashboard/scripts/build_seasonal.py \
+  --model-run-id "$RUN_ID" \
+  > "$SEASONAL_LOG" 2>&1 &
+
+echo "seasonal_builder_pid=$!"
+tail -f "$SEASONAL_LOG"
+```
+
+The final line must be `Seasonal prediction build complete`. Then validate the
+full result and refresh the read-only grants:
+
+```bash
+sudo -u postgres env \
+  DATABASE_URL='postgresql:///kenya_monitoring?host=/var/run/postgresql' \
+  /opt/kenya-dashboard/venv/bin/python \
+  /opt/kenya-dashboard/current/dashboard/scripts/validate_seasonal.py
+
+sudo -u postgres psql -d kenya_monitoring -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT ON ALL TABLES IN SCHEMA dashboard TO kenya_dashboard;"
+```
+
+Continue only when validation reports `"status": "passed"`. Restart the API
+after the seasonal data is complete, then smoke-test the new routes:
+
+```bash
+systemctl restart kenya-dashboard-api
+systemctl status kenya-dashboard-api --no-pager
+
+curl --fail 'http://127.0.0.1:8000/api/v1/seasons'
+curl --fail \
+  'http://127.0.0.1:8000/api/v1/summary/seasonal?season=2026_lr'
+curl --fail -I https://yield-forecast.geo-infinity.com/
+```

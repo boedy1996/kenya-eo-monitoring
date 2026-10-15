@@ -1,33 +1,70 @@
-import type { Catalog, Filters, Week } from "../types";
+import type { Catalog, Filters, SeasonDefinition, Week } from "../types";
 
 type Props = {
   catalog: Catalog;
   weeks: Week[];
+  seasons: SeasonDefinition[];
   filters: Filters;
   onChange: (filters: Filters) => void;
 };
 
-export function FilterBar({ catalog, weeks, filters, onChange }: Props) {
+export function FilterBar({ catalog, weeks, seasons, filters, onChange }: Props) {
   const set = <K extends keyof Filters>(key: K, value: Filters[K]) =>
     onChange({ ...filters, [key]: value });
   const selectedWeek = weeks.find((item) => item.week_start === filters.week);
+  const selectedSeason = seasons.find((item) => item.season_code === filters.season);
+  const reasonOptions = filters.mode === "seasonal"
+    ? ["final", "provisional", "ambiguous", "insufficient_data"]
+    : catalog.reasons;
 
   return (
     <section className="filter-bar" aria-label="Map filters">
       <label>
-        <span>Week</span>
-        <select value={filters.week} onChange={(event) => set("week", event.target.value)}>
-          {weeks.map((week) => (
-            <option value={week.week_start} key={week.week_start}>
-              {week.week_start}
-            </option>
-          ))}
+        <span>View</span>
+        <select
+          value={filters.mode}
+          onChange={(event) => onChange({
+            ...filters,
+            mode: event.target.value as Filters["mode"],
+            reason: "",
+          })}
+        >
+          <option value="weekly">Weekly</option>
+          <option value="seasonal">Seasonal</option>
+        </select>
+      </label>
+      <label>
+        <span>{filters.mode === "seasonal" ? "Season" : "Week"}</span>
+        <select
+          value={filters.mode === "seasonal" ? filters.season : filters.week}
+          onChange={(event) => {
+            if (filters.mode === "seasonal") set("season", event.target.value);
+            else set("week", event.target.value);
+          }}
+        >
+          {filters.mode === "seasonal"
+            ? seasons.map((season) => (
+                <option value={season.season_code} key={season.season_code}>
+                  {season.season_year} {season.season_name}
+                </option>
+              ))
+            : weeks.map((week) => (
+                <option value={week.week_start} key={week.week_start}>
+                  {week.week_start}
+                </option>
+              ))}
         </select>
       </label>
       <div className="season-context">
-        <span>{selectedWeek?.season ?? "Inter-season"}</span>
+        <span>
+          {filters.mode === "seasonal"
+            ? `${selectedSeason?.season_start ?? "—"} – ${selectedSeason?.season_end ?? "—"}`
+            : selectedWeek?.season ?? "Inter-season"}
+        </span>
         <strong>
-          {selectedWeek?.week_in_season ? `Horizon ${selectedWeek.week_in_season}` : "No horizon"}
+          {filters.mode === "seasonal"
+            ? selectedSeason?.is_complete ? "Final" : "Provisional"
+            : selectedWeek?.week_in_season ? `Horizon ${selectedWeek.week_in_season}` : "No horizon"}
         </strong>
       </div>
       <label>
@@ -49,10 +86,12 @@ export function FilterBar({ catalog, weeks, filters, onChange }: Props) {
         </select>
       </label>
       <label>
-        <span>Reason</span>
+        <span>{filters.mode === "seasonal" ? "Status" : "Reason"}</span>
         <select value={filters.reason} onChange={(event) => set("reason", event.target.value)}>
-          <option value="">All reasons</option>
-          {catalog.reasons.map((reason) => (
+          <option value="">
+            {filters.mode === "seasonal" ? "All statuses" : "All reasons"}
+          </option>
+          {reasonOptions.map((reason) => (
             <option key={reason}>{reason.replaceAll("_", " ")}</option>
           ))}
         </select>

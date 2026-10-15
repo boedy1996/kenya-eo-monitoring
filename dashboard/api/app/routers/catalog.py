@@ -68,3 +68,25 @@ async def weeks(
             )
         ).fetchall()
     return {"model_run_id": run_id, "weeks": rows}
+
+
+@router.get("/seasons")
+async def seasons(
+    request: Request,
+    model_run_id: str | None = None,
+) -> dict[str, object]:
+    async with request.app.state.db_pool.connection() as conn:
+        run_id = await active_model_run_id(conn, model_run_id)
+        rows = await (
+            await conn.execute(
+                """
+                SELECT season_code, season_year, season_kind, season_name,
+                       season_start, season_end, is_complete, method_version
+                FROM dashboard.season_definitions
+                WHERE model_run_id = %s
+                ORDER BY season_start
+                """,
+                (run_id,),
+            )
+        ).fetchall()
+    return {"model_run_id": run_id, "seasons": rows}

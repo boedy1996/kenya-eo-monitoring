@@ -206,7 +206,8 @@ export function MapPanel({ filters, onSelectField }: Props) {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady || !filters.week) return;
+    const selection = filters.mode === "seasonal" ? filters.season : filters.week;
+    if (!map || !mapReady || !selection) return;
     const installSource = () => {
       for (const layerId of LAYER_IDS) {
         if (map.getLayer(layerId)) map.removeLayer(layerId);
@@ -283,7 +284,10 @@ export function MapPanel({ filters, onSelectField }: Props) {
         </select>
         {basemapError && <small title={basemapError}>Provider unavailable</small>}
       </label>
-      <div className="map-caption">Field predictions · click a field to inspect</div>
+      <div className="map-caption">
+        {filters.mode === "seasonal" ? "Seasonal field calls" : "Weekly field predictions"}
+        {" · click a field to inspect"}
+      </div>
     </div>
   );
 }

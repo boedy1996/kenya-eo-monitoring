@@ -7,7 +7,15 @@ import { KpiStrip } from "./components/KpiStrip";
 import { MapPanel } from "./components/MapPanel";
 import type { Filters } from "./types";
 
-const initialFilters: Filters = { week: "", county: "", label: "", reason: "", minConfidence: 0 };
+const initialFilters: Filters = {
+  mode: "weekly",
+  week: "",
+  season: "",
+  county: "",
+  label: "",
+  reason: "",
+  minConfidence: 0,
+};
 const FieldDrawer = lazy(() =>
   import("./components/FieldDrawer").then((module) => ({ default: module.FieldDrawer })),
 );
@@ -18,17 +26,26 @@ export default function App() {
   const [search, setSearch] = useState("");
   const catalog = useQuery({ queryKey: ["catalog"], queryFn: api.catalog });
   const weeks = useQuery({ queryKey: ["weeks"], queryFn: api.weeks });
+  const seasons = useQuery({ queryKey: ["seasons"], queryFn: api.seasons });
 
   useEffect(() => {
     if (!filters.week && weeks.data?.weeks.length) {
       setFilters((current) => ({ ...current, week: weeks.data!.weeks.at(-1)!.week_start }));
     }
   }, [filters.week, weeks.data]);
+  useEffect(() => {
+    if (!filters.season && seasons.data?.seasons.length) {
+      setFilters((current) => ({
+        ...current,
+        season: seasons.data!.seasons.at(-1)!.season_code,
+      }));
+    }
+  }, [filters.season, seasons.data]);
 
   const summary = useQuery({
     queryKey: ["summary", filters],
     queryFn: () => api.summary(filters),
-    enabled: Boolean(filters.week),
+    enabled: filters.mode === "weekly" ? Boolean(filters.week) : Boolean(filters.season),
   });
   const searchResults = useQuery({
     queryKey: ["field-search", search],
@@ -40,10 +57,10 @@ export default function App() {
     [summary.data],
   );
 
-  if (catalog.isLoading || weeks.isLoading) {
+  if (catalog.isLoading || weeks.isLoading || seasons.isLoading) {
     return <main className="loading-screen"><div className="pulse" /><p>Preparing crop monitor…</p></main>;
   }
-  if (catalog.error || weeks.error || !catalog.data) {
+  if (catalog.error || weeks.error || seasons.error || !catalog.data) {
     return (
       <main className="loading-screen error-screen">
         <h1>Dashboard data is unavailable</h1>
@@ -67,7 +84,13 @@ export default function App() {
         </div>
       </header>
 
-      <FilterBar catalog={catalog.data} weeks={weeks.data?.weeks ?? []} filters={filters} onChange={setFilters} />
+      <FilterBar
+        catalog={catalog.data}
+        weeks={weeks.data?.weeks ?? []}
+        seasons={seasons.data?.seasons ?? []}
+        filters={filters}
+        onChange={setFilters}
+      />
 
       <main className="workspace">
         <section className="map-column">
@@ -102,11 +125,23 @@ export default function App() {
           </div>
         </section>
         <aside className="insight-column">
-          <div className="section-title"><div><span className="eyebrow">Weekly snapshot</span><h2>Prediction overview</h2></div><span>{filters.week}</span></div>
+          <div className="section-title">
+            <div>
+              <span className="eyebrow">
+                {filters.mode === "seasonal" ? "Seasonal result" : "Weekly snapshot"}
+              </span>
+              <h2>Prediction overview</h2>
+            </div>
+            <span>{filters.mode === "seasonal" ? filters.season : filters.week}</span>
+          </div>
           <KpiStrip groups={summary.data?.groups ?? []} />
           <section className="model-note">
             <h3>How to read this map</h3>
-            <p>Every field is assigned a model label or marked Unclassified with a reason. Confidence describes model certainty within the pilot classes.</p>
+            <p>
+              {filters.mode === "seasonal"
+                ? "Seasonal calls use the top three weekly confidences. Near ties are resolved by frequency, then median confidence."
+                : "Every field is assigned a model label or marked Unclassified with a reason. Confidence describes model certainty within the pilot classes."}
+            </p>
           </section>
           <section className="coverage-card">
             <div><span>Fields in model run</span><strong>{catalog.data.model_run.field_count.toLocaleString()}</strong></div>
@@ -115,9 +150,9 @@ export default function App() {
           </section>
         </aside>
       </main>
-      {selectedField && filters.week && (
+      {selectedField && (filters.mode === "weekly" ? filters.week : filters.season) && (
         <Suspense fallback={<div className="drawer-loading">Loading field details…</div>}>
-          <FieldDrawer fieldId={selectedField} week={filters.week} onClose={() => setSelectedField("")} />
+          <FieldDrawer fieldId={selectedField} filters={filters} onClose={() => setSelectedField("")} />
         </Suspense>
       )}
     </div>

@@ -31,7 +31,7 @@ button { cursor: pointer; }
 .run-context { margin-left: auto; max-width: 330px; text-align: right; }
 .run-context strong { display: block; margin-top: 3px; font-family: "DM Mono"; font-size: 11px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.filter-bar { display: grid; grid-template-columns: 190px 130px 150px 160px minmax(170px, 1fr) 220px; gap: 12px; align-items: end; padding: 14px 22px; background: white; border-bottom: 1px solid var(--line); box-shadow: 0 3px 14px rgb(27 51 37 / 5%); z-index: 5; }
+.filter-bar { display: grid; grid-template-columns: 110px 180px 150px 145px 145px minmax(165px, 1fr) 205px; gap: 12px; align-items: end; padding: 14px 22px; background: white; border-bottom: 1px solid var(--line); box-shadow: 0 3px 14px rgb(27 51 37 / 5%); z-index: 5; }
 .filter-bar label > span, .confidence-filter > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .filter-bar select, .field-search input { width: 100%; height: 38px; padding: 0 11px; color: var(--ink); background: #f8f9f5; border: 1px solid var(--line); border-radius: 7px; outline: none; }
 .filter-bar select:focus, .field-search input:focus { border-color: #6a9279; box-shadow: 0 0 0 3px rgb(71 128 91 / 10%); }

@@ -102,6 +102,45 @@ async def field_predictions(
     return {"model_run_id": run_id, "field_id": field_id, "predictions": rows}
 
 
+@router.get("/fields/{field_id}/seasonal")
+async def field_seasonal_detail(
+    field_id: str,
+    request: Request,
+    season: str,
+    model_run_id: str | None = None,
+) -> dict[str, object]:
+    async with request.app.state.db_pool.connection() as conn:
+        run_id = await active_model_run_id(conn, model_run_id)
+        row = await (
+            await conn.execute(
+                """
+                SELECT f.field_id, f.county, f.area_ha, f.source_layer,
+                       ST_X(ST_Transform(f.centroid, 4326)) AS longitude,
+                       ST_Y(ST_Transform(f.centroid, 4326)) AS latitude,
+                       p.season_code, p.season_year, p.season_kind,
+                       p.season_start, p.season_end,
+                       p.seasonal_label, p.leading_label,
+                       p.seasonal_confidence, p.status,
+                       p.total_weeks, p.classified_weeks,
+                       p.appearance_count, p.vote_share,
+                       p.median_confidence, p.maximum_confidence,
+                       p.runner_up_label, p.runner_up_confidence,
+                       p.confidence_margin, p.method_version
+                FROM dashboard.fields AS f
+                LEFT JOIN dashboard.seasonal_predictions AS p
+                  ON p.field_id = f.field_id
+                 AND p.model_run_id = %s
+                 AND p.season_code = %s
+                WHERE f.field_id = %s
+                """,
+                (run_id, season, field_id),
+            )
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Field not found")
+    return {"model_run_id": run_id, "field": row}
+
+
 @router.get("/fields/{field_id}/signals")
 async def field_signals(
     field_id: str,

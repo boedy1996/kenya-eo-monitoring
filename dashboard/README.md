@@ -35,6 +35,8 @@ preferred. The `.env` file is ignored by Git.
 python dashboard/scripts/migrate.py
 python dashboard/scripts/load_dev_bundle.py \
   --bundle-dir dashboard/data/dev/kenya-dashboard-dev-v1
+python dashboard/scripts/build_seasonal.py
+python dashboard/scripts/validate_seasonal.py
 
 uvicorn dashboard.api.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
@@ -72,3 +74,16 @@ fields per county.
 
 The model remains a pilot baseline. The dashboard must always display this
 status and the model reason alongside every prediction.
+
+## Seasonal view
+
+The seasonal map keeps one result per field for each Long Rains (March through
+May) and Short Rains (October through December) season. It requires at least
+three classified weekly calls. For each crop, its strength is the mean of its
+three highest weekly confidence values. Crops within 0.05 of the highest
+strength are compared by appearance frequency and then median confidence.
+Unresolved ties are marked `ambiguous`; incomplete seasons are marked
+`provisional`.
+
+The displayed value is model confidence within the pilot classes. It is not a
+measured accuracy score.

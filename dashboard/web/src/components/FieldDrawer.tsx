@@ -2,19 +2,47 @@ import ReactECharts from "echarts-for-react";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api";
+import type { Filters } from "../types";
 
-type Props = { fieldId: string; week: string; onClose: () => void };
+type Props = { fieldId: string; filters: Filters; onClose: () => void };
 
 const percentage = (value: number | null | undefined) =>
   value == null ? "—" : `${Math.round(value * 100)}%`;
 
-export function FieldDrawer({ fieldId, week, onClose }: Props) {
-  const detail = useQuery({ queryKey: ["field", fieldId, week], queryFn: () => api.field(fieldId, week) });
-  const history = useQuery({ queryKey: ["predictions", fieldId], queryFn: () => api.predictions(fieldId) });
-  const signals = useQuery({ queryKey: ["signals", fieldId], queryFn: () => api.signals(fieldId) });
+const readable = (value: string | null | undefined) =>
+  value ? value.replaceAll("_", " ") : "—";
 
-  const field = detail.data?.field;
-  const option = {
+export function FieldDrawer({ fieldId, filters, onClose }: Props) {
+  const isSeasonal = filters.mode === "seasonal";
+  const weeklyDetail = useQuery({
+    queryKey: ["field", fieldId, filters.week],
+    queryFn: () => api.field(fieldId, filters.week),
+    enabled: !isSeasonal,
+  });
+  const seasonalDetail = useQuery({
+    queryKey: ["seasonal-field", fieldId, filters.season],
+    queryFn: () => api.seasonalField(fieldId, filters.season),
+    enabled: isSeasonal,
+  });
+  const seasonalField = seasonalDetail.data?.field;
+  const dateFrom = isSeasonal ? seasonalField?.season_start : undefined;
+  const dateTo = isSeasonal ? seasonalField?.season_end : undefined;
+  const history = useQuery({
+    queryKey: ["predictions", fieldId, dateFrom, dateTo],
+    queryFn: () => api.predictions(fieldId, dateFrom, dateTo),
+    enabled: !isSeasonal || Boolean(dateFrom && dateTo),
+  });
+  const signals = useQuery({
+    queryKey: ["signals", fieldId, dateFrom, dateTo],
+    queryFn: () => api.signals(fieldId, dateFrom, dateTo),
+    enabled: !isSeasonal || Boolean(dateFrom && dateTo),
+  });
+
+  const weeklyField = weeklyDetail.data?.field;
+  const field = isSeasonal ? seasonalField : weeklyField;
+  const detailLoading = isSeasonal ? seasonalDetail.isLoading : weeklyDetail.isLoading;
+  const detailError = isSeasonal ? seasonalDetail.error : weeklyDetail.error;
+  const chartOption = {
     animation: false,
     tooltip: { trigger: "axis" },
     legend: { top: 0, textStyle: { color: "#526158", fontSize: 10 } },
@@ -24,15 +52,40 @@ export function FieldDrawer({ fieldId, week, onClose }: Props) {
       data: signals.data?.s2.map((row) => row.start_date) ?? [],
       axisLabel: { hideOverlap: true, color: "#738078" },
     },
-    yAxis: { type: "value", axisLabel: { color: "#738078" }, splitLine: { lineStyle: { color: "#e4e8e1" } } },
+    yAxis: {
+      type: "value",
+      axisLabel: { color: "#738078" },
+      splitLine: { lineStyle: { color: "#e4e8e1" } },
+    },
     series: [
-      { name: "NDVI", type: "line", symbol: "none", data: signals.data?.s2.map((row) => row.ndvi_mean), lineStyle: { color: "#3f8f59" } },
-      { name: "EVI", type: "line", symbol: "none", data: signals.data?.s2.map((row) => row.evi_mean), lineStyle: { color: "#c58537" } },
-      { name: "LAI", type: "line", symbol: "none", data: signals.data?.s2.map((row) => row.lai_mean), lineStyle: { color: "#367fba" }, yAxisIndex: 0 },
+      {
+        name: "NDVI",
+        type: "line",
+        symbol: "none",
+        data: signals.data?.s2.map((row) => row.ndvi_mean),
+        lineStyle: { color: "#3f8f59" },
+      },
+      {
+        name: "EVI",
+        type: "line",
+        symbol: "none",
+        data: signals.data?.s2.map((row) => row.evi_mean),
+        lineStyle: { color: "#c58537" },
+      },
+      {
+        name: "LAI",
+        type: "line",
+        symbol: "none",
+        data: signals.data?.s2.map((row) => row.lai_mean),
+        lineStyle: { color: "#367fba" },
+      },
     ],
   };
 
-  const selectedSignal = signals.data?.s2.find((row) => row.start_date === week);
+  const selectedSignal = signals.data?.s2.find((row) => row.start_date === filters.week);
+  const historyRows = history.data?.predictions ?? [];
+  const visibleHistory = isSeasonal ? historyRows : historyRows.slice(-8);
+
   return (
     <aside className="field-drawer" aria-live="polite">
       <header>
@@ -42,42 +95,84 @@ export function FieldDrawer({ fieldId, week, onClose }: Props) {
         </div>
         <button onClick={onClose} aria-label="Close field details">×</button>
       </header>
-      {detail.isLoading && <p className="muted">Loading field…</p>}
-      {detail.error && <p className="error">Unable to load this field.</p>}
+      {detailLoading && <p className="muted">Loading field…</p>}
+      {detailError && <p className="error">Unable to load this field.</p>}
       {field && (
         <>
           <div className="field-meta">
             <span>{field.county}</span>
             <span>{field.area_ha == null ? "Area unavailable" : `${field.area_ha.toFixed(2)} ha`}</span>
-            <span>{week}</span>
+            <span>
+              {isSeasonal
+                ? `${seasonalField?.season_start} – ${seasonalField?.season_end}`
+                : filters.week}
+            </span>
           </div>
-          <div className={`prediction-card label-${field.label.toLowerCase()}`}>
-            <span>Model call</span>
-            <strong>{field.label}</strong>
-            <div><b>{percentage(field.confidence)}</b> confidence</div>
-            <small>{field.reason.replaceAll("_", " ")}</small>
-          </div>
-          <div className="probability-grid">
-            <div><span>Maize</span><strong>{percentage(field.p_maize)}</strong></div>
-            <div><span>Beans</span><strong>{percentage(field.p_beans)}</strong></div>
-            <div><span>Potatoes</span><strong>{percentage(field.p_potatoes)}</strong></div>
-          </div>
-          <section className="quality-card">
-            <h3>Pixel audit</h3>
-            <dl>
-              <div><dt>Buffer used</dt><dd>{selectedSignal?.buffer_width_m ?? "—"} m</dd></div>
-              <div><dt>Before buffer</dt><dd>{selectedSignal?.pixel_count_before ?? "—"}</dd></div>
-              <div><dt>After buffer</dt><dd>{selectedSignal?.pixel_count_after ?? "—"}</dd></div>
-            </dl>
-          </section>
+
+          {isSeasonal && seasonalField ? (
+            <>
+              <div className={`prediction-card label-${seasonalField.seasonal_label.toLowerCase()}`}>
+                <span>Seasonal call</span>
+                <strong>{seasonalField.seasonal_label}</strong>
+                <div><b>{percentage(seasonalField.seasonal_confidence)}</b> confidence</div>
+                <small>{readable(seasonalField.status)}</small>
+              </div>
+              <section className="quality-card">
+                <h3>Seasonal evidence</h3>
+                <dl>
+                  <div><dt>Leading crop</dt><dd>{readable(seasonalField.leading_label)}</dd></div>
+                  <div><dt>Classified weeks</dt><dd>{seasonalField.classified_weeks} / {seasonalField.total_weeks}</dd></div>
+                  <div><dt>Leading appearances</dt><dd>{seasonalField.appearance_count ?? "—"}</dd></div>
+                  <div><dt>Vote share</dt><dd>{percentage(seasonalField.vote_share)}</dd></div>
+                  <div><dt>Median confidence</dt><dd>{percentage(seasonalField.median_confidence)}</dd></div>
+                  <div><dt>Maximum confidence</dt><dd>{percentage(seasonalField.maximum_confidence)}</dd></div>
+                  <div><dt>Runner-up crop</dt><dd>{readable(seasonalField.runner_up_label)}</dd></div>
+                  <div><dt>Runner-up strength</dt><dd>{percentage(seasonalField.runner_up_confidence)}</dd></div>
+                </dl>
+              </section>
+            </>
+          ) : weeklyField ? (
+            <>
+              <div className={`prediction-card label-${weeklyField.label.toLowerCase()}`}>
+                <span>Model call</span>
+                <strong>{weeklyField.label}</strong>
+                <div><b>{percentage(weeklyField.confidence)}</b> confidence</div>
+                <small>{readable(weeklyField.reason)}</small>
+              </div>
+              <div className="probability-grid">
+                <div><span>Maize</span><strong>{percentage(weeklyField.p_maize)}</strong></div>
+                <div><span>Beans</span><strong>{percentage(weeklyField.p_beans)}</strong></div>
+                <div><span>Potatoes</span><strong>{percentage(weeklyField.p_potatoes)}</strong></div>
+              </div>
+              <section className="quality-card">
+                <h3>Pixel audit</h3>
+                <dl>
+                  <div><dt>Buffer used</dt><dd>{selectedSignal?.buffer_width_m ?? "—"} m</dd></div>
+                  <div><dt>Before buffer</dt><dd>{selectedSignal?.pixel_count_before ?? "—"}</dd></div>
+                  <div><dt>After buffer</dt><dd>{selectedSignal?.pixel_count_after ?? "—"}</dd></div>
+                </dl>
+              </section>
+            </>
+          ) : null}
+
           <section className="chart-card">
-            <div className="section-title"><h3>Vegetation signals</h3><span>Weekly means</span></div>
-            {signals.isLoading ? <p className="muted">Loading signals…</p> : <ReactECharts option={option} style={{ height: 230 }} />}
+            <div className="section-title">
+              <h3>Vegetation signals</h3>
+              <span>{isSeasonal ? "Selected season" : "Weekly means"}</span>
+            </div>
+            {signals.isLoading ? (
+              <p className="muted">Loading signals…</p>
+            ) : (
+              <ReactECharts option={chartOption} style={{ height: 230 }} />
+            )}
           </section>
           <section className="history-card">
-            <div className="section-title"><h3>Prediction history</h3><span>{history.data?.predictions.length ?? 0} weeks</span></div>
+            <div className="section-title">
+              <h3>Prediction history</h3>
+              <span>{historyRows.length} weeks</span>
+            </div>
             <div className="history-list">
-              {history.data?.predictions.slice(-8).reverse().map((item) => (
+              {[...visibleHistory].reverse().map((item) => (
                 <div key={item.week_start}>
                   <time>{item.week_start}</time>
                   <span className={`history-label label-${item.label.toLowerCase()}`}>{item.label}</span>
