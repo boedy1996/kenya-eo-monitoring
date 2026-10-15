@@ -383,7 +383,7 @@ def main() -> None:
                 """,
                 (run["model_run_id"],),
             )
-        conn.execute("ANALYZE dashboard.seasonal_predictions")
+        conn.execute("VACUUM (ANALYZE) dashboard.seasonal_predictions")
         conn.execute("ANALYZE dashboard.seasonal_prediction_summary")
         log("Seasonal prediction build complete")
 
