@@ -69,12 +69,14 @@ export function MapPanel({ filters, onSelectField }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
   const selectRef = useRef(onSelectField);
+  const [mapReady, setMapReady] = useState(false);
   const [basemap, setBasemap] = useState<BasemapId>("osm");
   const [basemapError, setBasemapError] = useState<string | null>(null);
   selectRef.current = onSelectField;
 
   useEffect(() => {
     if (!container.current || mapRef.current) return;
+    setMapReady(false);
     const map = new maplibregl.Map({
       container: container.current,
       center: [36.5, -0.4],
@@ -92,6 +94,11 @@ export function MapPanel({ filters, onSelectField }: Props) {
     });
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+    let active = true;
+    const handleLoad = () => {
+      if (active) setMapReady(true);
+    };
+    map.once("load", handleLoad);
     const queryCropFeatures = (event: MapMouseEvent) => {
       const availableLayers = LAYER_IDS.filter((layerId) => map.getLayer(layerId));
       if (!availableLayers.length) return [];
@@ -109,6 +116,8 @@ export function MapPanel({ filters, onSelectField }: Props) {
     });
     mapRef.current = map;
     return () => {
+      active = false;
+      map.off("load", handleLoad);
       map.remove();
       mapRef.current = null;
     };
@@ -116,7 +125,7 @@ export function MapPanel({ filters, onSelectField }: Props) {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapReady) return;
     let disposed = false;
 
     const removeCurrentBasemap = () => {
@@ -188,19 +197,16 @@ export function MapPanel({ filters, onSelectField }: Props) {
       }
     };
 
-    const handleLoad = () => void installBasemap();
-    if (map.loaded()) handleLoad();
-    else map.once("load", handleLoad);
+    void installBasemap();
 
     return () => {
       disposed = true;
-      map.off("load", handleLoad);
     };
-  }, [basemap]);
+  }, [basemap, mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !filters.week) return;
+    if (!map || !mapReady || !filters.week) return;
     const installSource = () => {
       for (const layerId of LAYER_IDS) {
         if (map.getLayer(layerId)) map.removeLayer(layerId);
@@ -258,9 +264,8 @@ export function MapPanel({ filters, onSelectField }: Props) {
         },
       });
     };
-    if (map.loaded()) installSource();
-    else map.once("load", installSource);
-  }, [filters]);
+    installSource();
+  }, [filters, mapReady]);
 
   return (
     <div className="map-shell">
