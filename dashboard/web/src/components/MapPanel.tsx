@@ -16,7 +16,7 @@ const SOURCE_ID = "crop-fields";
 const LAYER_IDS = ["crop-polygons", "crop-outlines", "crop-centroids"];
 const BASEMAP_SOURCE_ID = "dashboard-basemap";
 const BASEMAP_LAYER_ID = "dashboard-basemap";
-maplibregl.setWorkerUrl(maplibreWorkerUrl);
+maplibregl.setWorkerUrl(`${maplibreWorkerUrl}?v=20261015`);
 
 type BasemapId =
   | "osm"
