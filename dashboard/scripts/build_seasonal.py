@@ -7,7 +7,7 @@ import argparse
 import os
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import psycopg
 from psycopg.rows import dict_row
@@ -200,7 +200,7 @@ SELECT %(run)s,
            WHEN coalesce(stats.classified_weeks, 0) < %(minimum_weeks)s OR winner.field_id IS NULL
                THEN 'insufficient_data'
            WHEN winner.is_ambiguous THEN 'ambiguous'
-           WHEN %(end)s > %(model_date_to)s THEN 'provisional'
+           WHEN %(end)s > %(model_coverage_end)s THEN 'provisional'
            ELSE 'final'
        END,
        %(total_weeks)s,
@@ -244,7 +244,8 @@ def main() -> None:
         if not run:
             raise RuntimeError("Dashboard model run not found")
 
-        all_seasons = seasons_between(run["date_from"], run["date_to"])
+        model_coverage_end = run["date_to"] + timedelta(days=6)
+        all_seasons = seasons_between(run["date_from"], model_coverage_end)
         seasons = all_seasons
         if args.season_codes:
             requested = set(args.season_codes)
@@ -295,7 +296,7 @@ def main() -> None:
                 "season_kind": season.kind,
                 "start": season.start,
                 "end": season.end,
-                "model_date_to": run["date_to"],
+                "model_coverage_end": model_coverage_end,
                 "total_weeks": total_weeks,
                 "minimum_weeks": args.minimum_classified_weeks,
                 "near_tie": args.near_tie,
@@ -339,7 +340,7 @@ def main() -> None:
                     (
                         run["model_run_id"], season.code, season.year, season.kind,
                         season.name, season.start, season.end,
-                        season.end <= run["date_to"], args.method_version,
+                        season.end <= model_coverage_end, args.method_version,
                     ),
                 )
                 conn.execute(

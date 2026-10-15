@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 from psycopg.rows import dict_row
@@ -68,9 +68,12 @@ def main() -> None:
                 (SELECT count(*)
                  FROM dashboard.season_definitions
                  WHERE model_run_id = %(run)s
-                   AND is_complete <> (season_end <= %(date_to)s)) AS invalid_completion_flags
+                   AND is_complete <> (season_end <= %(coverage_end)s)) AS invalid_completion_flags
             """,
-            {"run": run["model_run_id"], "date_to": run["date_to"]},
+            {
+                "run": run["model_run_id"],
+                "coverage_end": run["date_to"] + timedelta(days=6),
+            },
         ).fetchone()
 
         status_counts = conn.execute(
@@ -84,7 +87,9 @@ def main() -> None:
             (run["model_run_id"],),
         ).fetchall()
 
-    expected_seasons = expected_season_count(run["date_from"], run["date_to"])
+    expected_seasons = expected_season_count(
+        run["date_from"], run["date_to"] + timedelta(days=6)
+    )
     expected_rows = run["field_count"] * expected_seasons
     failures: list[str] = []
     comparisons = {
