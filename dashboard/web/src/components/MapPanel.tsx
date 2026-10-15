@@ -92,14 +92,19 @@ export function MapPanel({ filters, onSelectField }: Props) {
     });
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+    const queryCropFeatures = (event: MapMouseEvent) => {
+      const availableLayers = LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+      if (!availableLayers.length) return [];
+      return map.queryRenderedFeatures(event.point, { layers: availableLayers });
+    };
     const handleClick = (event: MapMouseEvent) => {
-      const features = map.queryRenderedFeatures(event.point, { layers: LAYER_IDS });
+      const features = queryCropFeatures(event);
       const fieldId = features[0]?.properties?.field_id as string | undefined;
       if (fieldId) selectRef.current(fieldId);
     };
     map.on("click", handleClick);
     map.on("mousemove", (event: MapMouseEvent) => {
-      const features = map.queryRenderedFeatures(event.point, { layers: LAYER_IDS });
+      const features = queryCropFeatures(event);
       map.getCanvas().style.cursor = features.length ? "pointer" : "";
     });
     mapRef.current = map;
