@@ -115,8 +115,11 @@ crop_stats AS MATERIALIZED (
            county,
            label,
            appearance_count,
-           (SELECT avg(value) FROM unnest(confidence_values[1:3]) AS value)
-               AS top3_confidence,
+           (
+               confidence_values[1]
+               + coalesce(confidence_values[2], 0.0)
+               + coalesce(confidence_values[3], 0.0)
+           ) / least(appearance_count, 3)::double precision AS top3_confidence,
            CASE
                WHEN appearance_count %% 2 = 1
                    THEN confidence_values[(appearance_count + 1) / 2]
