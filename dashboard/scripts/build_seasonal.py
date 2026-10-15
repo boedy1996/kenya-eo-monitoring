@@ -137,30 +137,37 @@ candidates AS MATERIALIZED (
     FROM strength
     WHERE top3_confidence >= best_confidence - %(near_tie)s
 ),
+winner_choices AS MATERIALIZED (
+    SELECT field_id,
+           max(label) FILTER (WHERE choice_rank = 1) AS leading_label,
+           max(appearance_count) FILTER (WHERE choice_rank = 1) AS appearance_count,
+           max(top3_confidence) FILTER (WHERE choice_rank = 1) AS top3_confidence,
+           max(median_confidence) FILTER (WHERE choice_rank = 1) AS median_confidence,
+           max(maximum_confidence) FILTER (WHERE choice_rank = 1) AS maximum_confidence,
+           max(label) FILTER (WHERE choice_rank = 2) AS runner_up_label,
+           max(appearance_count) FILTER (WHERE choice_rank = 2)
+               AS runner_up_appearance_count,
+           max(top3_confidence) FILTER (WHERE choice_rank = 2)
+               AS runner_up_confidence,
+           max(median_confidence) FILTER (WHERE choice_rank = 2)
+               AS runner_up_median_confidence
+    FROM candidates
+    WHERE choice_rank <= 2
+    GROUP BY field_id
+),
 winner AS MATERIALIZED (
-    SELECT first.field_id,
-           first.label AS leading_label,
-           first.appearance_count,
-           first.top3_confidence,
-           first.median_confidence,
-           first.maximum_confidence,
-           second.label AS runner_up_label,
-           second.top3_confidence AS runner_up_confidence,
+    SELECT winner_choices.*,
            CASE
-               WHEN second.label IS NOT NULL
-               THEN first.top3_confidence - second.top3_confidence
+               WHEN runner_up_label IS NOT NULL
+               THEN top3_confidence - runner_up_confidence
            END AS confidence_margin,
            CASE
-               WHEN second.label IS NOT NULL
-                AND first.appearance_count = second.appearance_count
-                AND abs(first.median_confidence - second.median_confidence) <= %(median_tie)s
+               WHEN runner_up_label IS NOT NULL
+                AND appearance_count = runner_up_appearance_count
+                AND abs(median_confidence - runner_up_median_confidence) <= %(median_tie)s
                THEN true ELSE false
            END AS is_ambiguous
-    FROM candidates AS first
-    LEFT JOIN candidates AS second
-      ON second.field_id = first.field_id
-     AND second.choice_rank = 2
-    WHERE first.choice_rank = 1
+    FROM winner_choices
 )
 INSERT INTO dashboard.seasonal_predictions (
     model_run_id, field_id, county, season_code, season_year, season_kind,
