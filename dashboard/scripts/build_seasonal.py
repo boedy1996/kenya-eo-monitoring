@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--near-tie", type=float, default=0.05)
     parser.add_argument("--median-tie", type=float, default=0.01)
     parser.add_argument("--method-version", default="seasonal-top3-v1")
+    parser.add_argument(
+        "--work-mem",
+        default="512MB",
+        help="PostgreSQL work_mem for this builder session only (default: 512MB)",
+    )
     parser.add_argument("--rebuild", action="store_true")
     return parser.parse_args()
 
@@ -199,6 +204,11 @@ def main() -> None:
         raise ValueError("tie thresholds must be between zero and one")
 
     with psycopg.connect(database_url(), autocommit=True, row_factory=dict_row) as conn:
+        configured_work_mem = conn.execute(
+            "SELECT set_config('work_mem', %s, false) AS work_mem",
+            (args.work_mem,),
+        ).fetchone()["work_mem"]
+        log(f"PostgreSQL session work_mem: {configured_work_mem}")
         if args.model_run_id:
             run = conn.execute(
                 "SELECT * FROM dashboard.model_runs WHERE model_run_id = %s",

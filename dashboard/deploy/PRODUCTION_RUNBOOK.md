@@ -292,6 +292,7 @@ sudo -u postgres env \
   nohup /opt/kenya-dashboard/venv/bin/python \
   /opt/kenya-dashboard/current/dashboard/scripts/build_seasonal.py \
   --model-run-id "$RUN_ID" \
+  --work-mem 512MB \
   > "$SEASONAL_LOG" 2>&1 &
 
 echo "seasonal_builder_pid=$!"
