@@ -139,7 +139,7 @@ export default function App() {
             <h3>How to read this map</h3>
             <p>
               {filters.mode === "seasonal"
-                ? "Seasonal calls use the top three weekly confidences. Near ties are resolved by frequency, then median confidence."
+                ? "Model seasons run March–August for Long Rains and October–February for Short Rains. Calls use the top three weekly confidences; near ties are resolved by frequency, then median confidence."
                 : "Every field is assigned a model label or marked Unclassified with a reason. Confidence describes model certainty within the pilot classes."}
             </p>
           </section>

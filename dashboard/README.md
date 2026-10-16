@@ -77,13 +77,16 @@ status and the model reason alongside every prediction.
 
 ## Seasonal view
 
-The seasonal map keeps one result per field for each Long Rains (March through
-May) and Short Rains (October through December) season. It requires at least
-three classified weekly calls. For each crop, its strength is the mean of its
-three highest weekly confidence values. Crops within 0.05 of the highest
-strength are compared by appearance frequency and then median confidence.
-Unresolved ties are marked `ambiguous`; incomplete seasons are marked
-`provisional`.
+The seasonal map follows the model calendar: Long Rains run from 1 March
+through 31 August, Short Rains run from 1 October through the last day of
+February in the following year, and September is outside a model season. A
+Short Rains code uses its onset year, so `2023_sr` ends in February 2024.
+
+Each seasonal result requires at least three classified weekly calls. For each
+crop, its strength is the mean of its three highest weekly confidence values.
+Crops within 0.05 of the highest strength are compared by appearance frequency
+and then median confidence. Unresolved ties are marked `ambiguous`; seasons
+that extend beyond the model-run coverage are marked `provisional`.
 
 The displayed value is model confidence within the pilot classes. It is not a
 measured accuracy score.

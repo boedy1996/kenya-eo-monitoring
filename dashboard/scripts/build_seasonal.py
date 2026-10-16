@@ -6,21 +6,15 @@ from __future__ import annotations
 import argparse
 import os
 import time
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import psycopg
 from psycopg.rows import dict_row
 
-
-@dataclass(frozen=True)
-class Season:
-    code: str
-    year: int
-    kind: str
-    name: str
-    start: date
-    end: date
+try:
+    from .season_calendar import METHOD_VERSION, seasons_between
+except ImportError:
+    from season_calendar import METHOD_VERSION, seasons_between
 
 
 def log(message: str) -> None:
@@ -46,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minimum-classified-weeks", type=int, default=3)
     parser.add_argument("--near-tie", type=float, default=0.05)
     parser.add_argument("--median-tie", type=float, default=0.01)
-    parser.add_argument("--method-version", default="seasonal-top3-v1")
+    parser.add_argument("--method-version", default=METHOD_VERSION)
     parser.add_argument(
         "--work-mem",
         default="512MB",
@@ -61,24 +55,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def seasons_between(date_from: date, date_to: date) -> list[Season]:
-    result: list[Season] = []
-    for year in range(date_from.year, date_to.year + 1):
-        for kind, name, start, end in (
-            ("lr", "Long Rains", date(year, 3, 1), date(year, 5, 31)),
-            ("sr", "Short Rains", date(year, 10, 1), date(year, 12, 31)),
-        ):
-            if end >= date_from and start <= date_to:
-                result.append(Season(f"{year}_{kind}", year, kind, name, start, end))
-    return result
-
-
 INSERT_SEASON_SQL = """
 WITH eligible AS MATERIALIZED (
     SELECT field_id, county, label, confidence
     FROM dashboard.crop_predictions
     WHERE model_run_id = %(run)s
       AND week_start BETWEEN %(start)s AND %(end)s
+      AND season = %(season_code)s
       AND scorable
       AND reason = 'classified'
       AND label IN ('maize', 'beans', 'potatoes')
@@ -200,7 +183,8 @@ SELECT %(run)s,
            WHEN coalesce(stats.classified_weeks, 0) < %(minimum_weeks)s OR winner.field_id IS NULL
                THEN 'insufficient_data'
            WHEN winner.is_ambiguous THEN 'ambiguous'
-           WHEN %(end)s > %(model_coverage_end)s THEN 'provisional'
+           WHEN %(start)s < %(model_coverage_start)s
+             OR %(end)s > %(model_coverage_end)s THEN 'provisional'
            ELSE 'final'
        END,
        %(total_weeks)s,
@@ -244,6 +228,7 @@ def main() -> None:
         if not run:
             raise RuntimeError("Dashboard model run not found")
 
+        model_coverage_start = run["date_from"]
         model_coverage_end = run["date_to"] + timedelta(days=6)
         all_seasons = seasons_between(run["date_from"], model_coverage_end)
         seasons = all_seasons
@@ -284,8 +269,9 @@ def main() -> None:
                 FROM dashboard.prediction_week_summary
                 WHERE model_run_id = %s
                   AND week_start BETWEEN %s AND %s
+                  AND season = %s
                 """,
-                (run["model_run_id"], season.start, season.end),
+                (run["model_run_id"], season.start, season.end, season.code),
             ).fetchone()["total_weeks"]
             if not total_weeks:
                 raise RuntimeError(f"{season.code} contains no prediction weeks")
@@ -296,6 +282,7 @@ def main() -> None:
                 "season_kind": season.kind,
                 "start": season.start,
                 "end": season.end,
+                "model_coverage_start": model_coverage_start,
                 "model_coverage_end": model_coverage_end,
                 "total_weeks": total_weeks,
                 "minimum_weeks": args.minimum_classified_weeks,
@@ -340,7 +327,9 @@ def main() -> None:
                     (
                         run["model_run_id"], season.code, season.year, season.kind,
                         season.name, season.start, season.end,
-                        season.end <= model_coverage_end, args.method_version,
+                        season.start >= model_coverage_start
+                        and season.end <= model_coverage_end,
+                        args.method_version,
                     ),
                 )
                 conn.execute(
