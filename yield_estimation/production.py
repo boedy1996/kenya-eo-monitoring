@@ -125,7 +125,13 @@ def prepare(args: argparse.Namespace) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     active = psql_copy_frame(
         args.psql_command,
-        "SELECT model_run_id FROM dashboard.model_runs WHERE is_active ORDER BY loaded_at DESC LIMIT 1",
+        """
+        SELECT model_run_id, date_from, date_to
+        FROM dashboard.model_runs
+        WHERE is_active
+        ORDER BY loaded_at DESC
+        LIMIT 1
+        """,
     )
     if active.empty:
         raise RuntimeError("No active dashboard model run")
@@ -141,7 +147,15 @@ def prepare(args: argparse.Namespace) -> None:
         ORDER BY season_start
         """,
     )
-    seasons = seasons[seasons["is_complete"].astype(bool)].copy()
+    model_date_from = pd.Timestamp(active.iloc[0].date_from)
+    model_date_to = pd.Timestamp(active.iloc[0].date_to)
+    seasons["season_start"] = pd.to_datetime(seasons.season_start)
+    seasons["season_end"] = pd.to_datetime(seasons.season_end)
+    seasons = seasons[
+        seasons["is_complete"].astype(bool)
+        & seasons.season_start.ge(model_date_from)
+        & seasons.season_end.le(model_date_to)
+    ].copy()
     if args.season_code:
         requested = set(args.season_code)
         seasons = seasons[seasons.season_code.isin(requested)].copy()
@@ -211,6 +225,8 @@ def prepare(args: argparse.Namespace) -> None:
             text=True, capture_output=True, check=False,
         ).stdout.strip() or "unknown",
         "model_run_id": model_run_id,
+        "model_date_from": model_date_from.date().isoformat(),
+        "model_date_to": model_date_to.date().isoformat(),
         "field_count": len(field_attributes),
         "county_counts": field_attributes.groupby("county").size().to_dict(),
         "season_count": len(seasons),
