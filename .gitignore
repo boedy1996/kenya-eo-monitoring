@@ -80,6 +80,11 @@ giuseppe_delivery/
 metadata_audit/
 s1_gee_audit/
 s1_bandfix/audit_results/
+s1_bandfix/code_backup_*/
+
+# Retained server-side legacy copies
+dashboard_export_dev_bundle.py
+*.bak-*
 
 # ============================================================
 # OS/editor files
