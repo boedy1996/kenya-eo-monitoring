@@ -62,7 +62,7 @@ case "${ACTION}" in
   load-dashboard)
     sudo -u postgres env \
       DATABASE_URL='postgresql:///kenya_monitoring?host=/var/run/postgresql' \
-      "${DASHBOARD_PYTHON}" "${PROJECT_DIR}/dashboard/scripts/load_yield.py" \
+      "${DASHBOARD_PYTHON}" "/opt/kenya-dashboard/current/dashboard/scripts/load_yield.py" \
       --run-dir "${RUN_DIR}" --scratch-dir "${DASHBOARD_SCRATCH}"
     ;;
   status)
