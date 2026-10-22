@@ -3,8 +3,9 @@
 This workflow calculates remote sensing yield estimates for every field in the
 active crop model and every complete model season. Long Rains runs from 1 March
 through 31 August. Short Rains runs from 1 October through the end of February.
-Incomplete boundary seasons are kept in the crop dashboard but do not receive a
-yield estimate.
+Calendar-complete seasons are also required to fit fully within the active
+model run's date range. Boundary seasons with partial model history are kept in
+the crop dashboard but do not receive a yield estimate.
 
 The output remains labelled **calculated, unvalidated** because observed crop
 cuts are not available. Fields classified as unsupported, non-final, mixed, or
