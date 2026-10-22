@@ -1384,6 +1384,8 @@ def safe_divide(a, b):
 
 
 def compute_indices_from_weekly(weekly_path, out_path, overwrite=False, compress=True):
+    from recompute_weekly_indices import ALGORITHM_VERSION, BAND_INPUTS, compute_indices, validate_source
+
     weekly_path = Path(weekly_path)
     out_path = Path(out_path)
     if out_path.exists() and not overwrite:
@@ -1394,23 +1396,9 @@ def compute_indices_from_weekly(weekly_path, out_path, overwrite=False, compress
         return None
 
     with rasterio.open(weekly_path) as src:
-        B02 = src.read(1).astype(np.float32)
-        B03 = src.read(2).astype(np.float32)
-        B04 = src.read(3).astype(np.float32)
-        B05 = src.read(4).astype(np.float32)
-        B08 = src.read(7).astype(np.float32)
-        B8A = src.read(8).astype(np.float32)
-        B11 = src.read(9).astype(np.float32)
-
-        ndvi = clip_array(safe_divide((B08 - B04), (B08 + B04)), -1, 1)
-        evi = clip_array(safe_divide(2.5 * (B08 - B04), (B08 + 6 * B04 - 7.5 * B02 + 1.0)), -1, 1)
-        ndmi = clip_array(safe_divide((B08 - B11), (B08 + B11)), -1, 1)
-        ndre = clip_array(safe_divide((B8A - B05), (B8A + B05)), -1, 1)
-        msi = clip_array(safe_divide(B11, B08), 0, 10)
-        pvr = clip_array(safe_divide((B03 - B02), (B03 + B02)), -1, 1)
-        lai = clip_array((3.618 * ndvi - 0.118).astype(np.float32), 0, 10)
-
-        stack = np.stack([ndvi, evi, ndmi, ndre, msi, pvr, lai], axis=0).astype(np.float32)
+        validate_source(src, weekly_path)
+        raw = src.read(BAND_INPUTS, out_dtype="float32")
+        stack = np.stack(compute_indices(raw), axis=0).astype(np.float32)
 
         meta = src.meta.copy()
         meta.update({"count": 7, "dtype": "float32", "nodata": np.nan, "BIGTIFF": "IF_SAFER", "tiled": True})
@@ -1427,6 +1415,15 @@ def compute_indices_from_weekly(weekly_path, out_path, overwrite=False, compress
             dst.set_band_description(5, "MSI")
             dst.set_band_description(6, "PVR")
             dst.set_band_description(7, "LAI")
+            source_stat = weekly_path.stat()
+            dst.update_tags(
+                ALGORITHM_VERSION=ALGORITHM_VERSION,
+                SOURCE_WEEKLY_TIFF=weekly_path.name,
+                SOURCE_SIZE_BYTES=str(source_stat.st_size),
+                SOURCE_MTIME_NS=str(source_stat.st_mtime_ns),
+                SOURCE_BASELINE="UNVERIFIED_ASSUMED_BOA_ADD_OFFSET_MINUS_1000",
+                WEEKLY_REFLECTANCE_CORRECTION="subtract_0.1_from_each_valid_used_band",
+            )
     print(f"[OK] indices -> {out_path}")
     return out_path
 

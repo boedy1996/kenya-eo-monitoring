@@ -1,0 +1,6 @@
+region,week_start,source_path,pilot_output_path,source_bytes,pilot_bytes,output_to_source_ratio,source_zero_band_pixels,elapsed_seconds,source_baseline
+machakos,2016-01-04,/data/weekly/machakos_2016-01-04_2016-01-10_weekly_clean_10m.tif,/tmp/eo_indices_pilot/machakos_2016-01-04_2016-01-10_weekly_indices_10m.pilot_offset.tif,729891200,411539388,0.5638366211,60,62.2,unverified
+machakos,2023-05-29,/data/weekly/machakos_2023-05-29_2023-06-04_weekly_clean_10m.tif,/tmp/eo_indices_pilot/machakos_2023-05-29_2023-06-04_weekly_indices_10m.pilot_offset.tif,1890056940,805613287,0.4262375751,0,82.3,unverified
+nakuru,2016-01-04,/data/weekly/nakuru_2016-01-04_2016-01-10_weekly_clean_10m.tif,/tmp/eo_indices_pilot/nakuru_2016-01-04_2016-01-10_weekly_indices_10m.pilot_offset.tif,3302721964,1673388647,0.5066695487,0,148.1,unverified
+nakuru,2019-05-13,/data/weekly/nakuru_2019-05-13_2019-05-19_weekly_clean_10m.tif,/tmp/eo_indices_pilot/nakuru_2019-05-13_2019-05-19_weekly_indices_10m.pilot_offset.tif,6420577650,1691497401,0.2634494111,7,148.9,unverified
+nakuru,2023-05-29,/data/weekly/nakuru_2023-05-29_2023-06-04_weekly_clean_10m.tif,/tmp/eo_indices_pilot/nakuru_2023-05-29_2023-06-04_weekly_indices_10m.pilot_offset.tif,3533152182,753549461,0.2132796501,0,102.1,unverified

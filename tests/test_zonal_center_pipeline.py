@@ -127,6 +127,64 @@ class ZonalCenterPipelineIntegrationTest(unittest.TestCase):
         report = json.loads((self.run_dir / "validation_report.json").read_text())
         self.assertEqual(report["status"], "passed")
 
+    def test_weekly_linear_s1_archive_is_mapped_per_pixel(self):
+        raw_s1 = self.root / "s1-weekly"
+        raw_s1.mkdir()
+        raw_run = self.root / "raw-run"
+        for region in ("machakos", "nakuru"):
+            path = raw_s1 / f"{region}_2023-01-02_2023-01-08_weekly_clean_10m.tif"
+            band1 = np.full((4, 4), np.nan, dtype=np.float32)
+            band2 = np.full((4, 4), np.nan, dtype=np.float32)
+            band1[0, 0], band2[0, 0] = 0.02, 0.10  # paired: VH, VV
+            band1[0, 1] = 0.12                    # single-pol VV
+            band2[1, 0] = 0.09                    # preserve lone band 2 as VV
+            band1[1, 1], band2[1, 1] = 0.03, 0.15
+            with rasterio.open(
+                path,
+                "w",
+                driver="GTiff",
+                width=4,
+                height=4,
+                count=2,
+                dtype="float32",
+                crs="EPSG:32737",
+                transform=from_origin(0, 40, 10, 10),
+                nodata=np.nan,
+            ) as dataset:
+                dataset.write(np.stack((band1, band2)))
+                dataset.descriptions = ("VV", "VH")
+
+        self.run_command(
+            "prepare",
+            "--run-dir", str(raw_run),
+            "--gpkg-path", str(self.gpkg),
+            "--s1-input-dir", str(raw_s1),
+            "--s1-input-kind", "weekly-linear",
+            "--s2-input-dir", str(self.s2),
+            "--min-pixels", "4",
+            "--tile-size", "2",
+        )
+        self.run_command(
+            "extract",
+            "--run-dir", str(raw_run),
+            "--sensor", "s1",
+            "--workers", "1",
+            "--batch-rows", "2",
+            "--duckdb-memory-limit", "1GB",
+        )
+        self.run_command("validate", "--run-dir", str(raw_run), "--sensor", "s1", "--full")
+
+        output = next((raw_run / "parts" / "s1" / "region=machakos").rglob("*.parquet"))
+        frame = pd.read_parquet(output)
+        self.assertEqual(frame.loc[0, "sigma_vv_linear_count"], 4)
+        self.assertAlmostEqual(frame.loc[0, "sigma_vv_linear_mean"], 0.115, places=6)
+        self.assertEqual(frame.loc[0, "sigma_vh_linear_count"], 2)
+        self.assertAlmostEqual(frame.loc[0, "sigma_vh_linear_mean"], 0.025, places=6)
+        self.assertEqual(frame.loc[0, "p_ratio_count"], 2)
+        self.assertAlmostEqual(frame.loc[0, "p_ratio_mean"], 0.2, places=6)
+        self.assertAlmostEqual(frame.loc[0, "rvi_mean"], 2 / 3, places=6)
+        self.assertAlmostEqual(frame.loc[0, "rcspr_mean"], 2 / 3, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()
