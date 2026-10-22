@@ -44,7 +44,7 @@ from rasterio.windows import Window, from_bounds
 from shapely.geometry.base import BaseGeometry
 
 
-PIPELINE_VERSION = "1.0.0"
+PIPELINE_VERSION = "1.1.0"
 DATE_RE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 REGIONS = ("machakos", "nakuru")
 SENSORS = ("s1", "s2")
@@ -187,7 +187,23 @@ def parse_raster_name(path: Path, sensor: str) -> tuple[str, date, date]:
     return region, start, end
 
 
-def validate_band_descriptions(dataset: rasterio.io.DatasetReader, sensor: str) -> None:
+def validate_band_descriptions(
+    dataset: rasterio.io.DatasetReader,
+    sensor: str,
+    input_kind: str = "indices",
+) -> None:
+    if sensor == "s1" and input_kind == "weekly-linear":
+        if dataset.count != 2:
+            raise ValueError(f"{dataset.name}: expected two weekly S1 source bands, found {dataset.count}")
+        if any(not np.issubdtype(np.dtype(dtype), np.floating) for dtype in dataset.dtypes):
+            raise ValueError(f"{dataset.name}: weekly S1 bands must use a floating-point dtype")
+        descriptions = tuple(normalize_name(item) for item in dataset.descriptions)
+        if descriptions != ("vv", "vh"):
+            raise ValueError(
+                f"{dataset.name}: expected archive descriptions ('VV', 'VH'), "
+                f"found {dataset.descriptions!r}"
+            )
+        return
     expected = BANDS[sensor]
     if dataset.count != len(expected):
         raise ValueError(
@@ -221,7 +237,11 @@ def weekly_gaps(records: Sequence[RasterRecord]) -> list[str]:
     return missing
 
 
-def inventory_rasters(sensor: str, input_dir: Path) -> tuple[list[RasterRecord], dict[str, GridSignature]]:
+def inventory_rasters(
+    sensor: str,
+    input_dir: Path,
+    input_kind: str = "indices",
+) -> tuple[list[RasterRecord], dict[str, GridSignature]]:
     paths = sorted(input_dir.glob("*.tif"))
     if not paths:
         raise FileNotFoundError(f"No GeoTIFF files found for {sensor.upper()}: {input_dir}")
@@ -238,7 +258,7 @@ def inventory_rasters(sensor: str, input_dir: Path) -> tuple[list[RasterRecord],
         seen_keys.add(key)
 
         with rasterio.open(path) as dataset:
-            validate_band_descriptions(dataset, sensor)
+            validate_band_descriptions(dataset, sensor, input_kind=input_kind)
             signature = GridSignature.from_dataset(dataset)
 
         if region in reference_grids and not reference_grids[region].grid_equals(signature):
@@ -505,8 +525,11 @@ def prepare(args: argparse.Namespace) -> None:
 
     inventories: dict[str, list[RasterRecord]] = {}
     grids_by_sensor: dict[str, dict[str, GridSignature]] = {}
+    input_kinds = {"s1": args.s1_input_kind, "s2": "indices"}
     for sensor in SENSORS:
-        inventories[sensor], grids_by_sensor[sensor] = inventory_rasters(sensor, inputs[sensor])
+        inventories[sensor], grids_by_sensor[sensor] = inventory_rasters(
+            sensor, inputs[sensor], input_kind=input_kinds[sensor]
+        )
         if args.raster_start_date:
             inventories[sensor] = [
                 record for record in inventories[sensor]
@@ -599,6 +622,7 @@ def prepare(args: argparse.Namespace) -> None:
         "uid_field": args.uid_field,
         "layers": layer_names,
         "input_dirs": {sensor: str(path) for sensor, path in inputs.items()},
+        "input_kinds": input_kinds,
         "field_counts": field_counts,
         "total_fields": sum(field_counts.values()),
         "raster_counts": raster_counts,
@@ -630,6 +654,7 @@ _WORKER_SENSOR: str | None = None
 _WORKER_REGION: str | None = None
 _WORKER_TEMP_ROOT: Path | None = None
 _WORKER_MEMORY_LIMIT: str | None = None
+_WORKER_INPUT_KIND: str = "indices"
 
 
 def init_extract_worker(
@@ -640,9 +665,11 @@ def init_extract_worker(
     region: str,
     temp_root: str,
     memory_limit: str,
+    input_kind: str,
 ) -> None:
     global _WORKER_MEMBERSHIP, _WORKER_STATIC_MANIFEST, _WORKER_GRID
     global _WORKER_SENSOR, _WORKER_REGION, _WORKER_TEMP_ROOT, _WORKER_MEMORY_LIMIT
+    global _WORKER_INPUT_KIND
     with np.load(membership_path, allow_pickle=False) as archive:
         _WORKER_MEMBERSHIP = {name: archive[name] for name in archive.files}
     _WORKER_STATIC_MANIFEST = Path(static_manifest_path)
@@ -652,6 +679,44 @@ def init_extract_worker(
     _WORKER_TEMP_ROOT = Path(temp_root)
     _WORKER_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
     _WORKER_MEMORY_LIMIT = memory_limit
+    _WORKER_INPUT_KIND = input_kind
+
+
+def corrected_s1_weekly_values(values: np.ndarray) -> np.ndarray:
+    """Map the historical two-band weekly archive to canonical S1 values.
+
+    The archive audit established this pixel-level rule:
+
+    * when both stored bands are valid, band 1 is VH and band 2 is VV;
+    * when only band 1 is valid, it comes from a single-polarization VV scene;
+    * when only band 2 is valid, preserve it as VV and leave VH null.
+
+    The function returns VV, VH, VH/VV, RVI, and RCSPR in that order.
+    """
+    if values.ndim != 2 or values.shape[1] != 2:
+        raise ValueError(f"Expected an (n, 2) weekly S1 array, found {values.shape}")
+    band1 = values[:, 0].astype(np.float32, copy=False)
+    band2 = values[:, 1].astype(np.float32, copy=False)
+    valid1 = np.isfinite(band1) & (band1 > 0)
+    valid2 = np.isfinite(band2) & (band2 > 0)
+    paired = valid1 & valid2
+
+    vv = np.full(len(values), np.nan, dtype=np.float32)
+    vh = np.full(len(values), np.nan, dtype=np.float32)
+    vv[valid2] = band2[valid2]
+    vv[valid1 & ~valid2] = band1[valid1 & ~valid2]
+    vh[paired] = band1[paired]
+
+    p_ratio = np.full(len(values), np.nan, dtype=np.float32)
+    rvi = np.full(len(values), np.nan, dtype=np.float32)
+    rcspr = np.full(len(values), np.nan, dtype=np.float32)
+    denominator = vv + vh
+    valid_pair = np.isfinite(vv) & np.isfinite(vh) & (vv > 0) & (vh > 0)
+    valid_sum = valid_pair & np.isfinite(denominator) & (denominator != 0)
+    p_ratio[valid_pair] = vh[valid_pair] / vv[valid_pair]
+    rvi[valid_sum] = 4.0 * vh[valid_sum] / denominator[valid_sum]
+    rcspr[valid_sum] = (vv[valid_sum] - vh[valid_sum]) / denominator[valid_sum]
+    return np.column_stack((vv, vh, p_ratio, rvi, rcspr)).astype(np.float32, copy=False)
 
 
 def gathered_schema(sensor: str) -> pa.Schema:
@@ -702,7 +767,7 @@ def write_gathered_values(
             signature = GridSignature.from_dataset(dataset)
             if not _WORKER_GRID.grid_equals(signature):
                 raise ValueError(f"Grid changed since prepare: {raster_path}")
-            validate_band_descriptions(dataset, sensor)
+            validate_band_descriptions(dataset, sensor, input_kind=_WORKER_INPUT_KIND)
 
             for position, tile_id_value in enumerate(membership["tile_ids"]):
                 start = int(membership["tile_offsets"][position])
@@ -726,6 +791,8 @@ def write_gathered_values(
                 if selected_mask.any():
                     values[selected_mask] = np.nan
                 values[~np.isfinite(values)] = np.nan
+                if sensor == "s1" and _WORKER_INPUT_KIND == "weekly-linear":
+                    values = corrected_s1_weekly_values(values)
 
                 pending_fields.append(membership["field_index"][start:stop])
                 pending_values.append(values)
@@ -908,10 +975,11 @@ def extract(args: argparse.Namespace) -> None:
     run_manifest = json.loads((run_dir / "run_manifest.json").read_text())
     inventory = pd.read_parquet(run_dir / "manifest" / "rasters.parquet")
     sensors = list(SENSORS) if args.sensor == "both" else [args.sensor]
+    regions = list(REGIONS) if args.region == "both" else [args.region]
     failures: list[dict[str, Any]] = []
 
     for sensor in sensors:
-        for region in REGIONS:
+        for region in regions:
             selected = inventory[(inventory.sensor == sensor) & (inventory.region == region)].copy()
             if args.start_date:
                 selected = selected[selected.start_date >= args.start_date]
@@ -926,6 +994,7 @@ def extract(args: argparse.Namespace) -> None:
             static_manifest_path = run_dir / "manifest" / f"fields_{sensor}_{region}.parquet"
             expected_rows = int(run_manifest["field_counts"][region])
             grid_payload = run_manifest["grid_signatures"][f"{sensor}_{region}"]
+            input_kind = run_manifest.get("input_kinds", {}).get(sensor, "indices")
             temp_root = run_dir / "tmp" / sensor / region
             tasks = []
             for row in selected.to_dict("records"):
@@ -956,6 +1025,7 @@ def extract(args: argparse.Namespace) -> None:
                     region,
                     str(temp_root),
                     args.duckdb_memory_limit,
+                    input_kind,
                 ),
             ) as executor:
                 futures = {executor.submit(extract_one_raster, task): task for task in tasks}
@@ -1003,13 +1073,36 @@ def validate_basic(run_dir: Path, sensors: Sequence[str]) -> dict[str, Any]:
     return report
 
 
-def full_validation_sql(run_dir: Path, sensor: str) -> dict[str, Any]:
+def full_validation_sql(
+    run_dir: Path,
+    sensor: str,
+    semantic_s1: bool = False,
+) -> dict[str, Any]:
     glob_path = run_dir / "parts" / sensor / "region=*" / "year=*" / "*.parquet"
     count_checks = " OR ".join(
         f"{band}_count < 0 OR {band}_count > pixel_count_after OR "
         f"{band}_count <> trunc({band}_count)"
         for band in BANDS[sensor]
     )
+    semantic_select = ""
+    if sensor == "s1" and semantic_s1:
+        semantic_select = """,
+                count(*) FILTER (
+                    WHERE p_ratio_count <> rvi_count
+                       OR p_ratio_count <> rcspr_count
+                       OR p_ratio_count > sigma_vv_linear_count
+                       OR p_ratio_count > sigma_vh_linear_count
+                ) AS bad_s1_counts,
+                count(*) FILTER (
+                    WHERE (p_ratio_min < 0)
+                       OR (rvi_min < -0.00001 OR rvi_max > 4.00001)
+                       OR (rcspr_min < -1.00001 OR rcspr_max > 1.00001)
+                ) AS bad_s1_domain,
+                count(*) FILTER (
+                    WHERE rvi_mean IS NOT NULL
+                      AND rcspr_mean IS NOT NULL
+                      AND abs(rvi_mean - 2.0 * (1.0 - rcspr_mean)) > 0.00002
+                ) AS bad_s1_identity"""
     connection = duckdb.connect()
     try:
         connection.execute("SET threads = 4")
@@ -1021,16 +1114,24 @@ def full_validation_sql(run_dir: Path, sensor: str) -> dict[str, Any]:
                 count(*) FILTER (WHERE buffer_width_m NOT IN (0, 5, 10)) AS bad_buffer,
                 count(*) FILTER (WHERE pixel_count_after > pixel_count_before OR pixel_count_after < 0) AS bad_geometry_count,
                 count(*) FILTER (WHERE {count_checks}) AS bad_valid_count
+                {semantic_select}
             FROM read_parquet({sql_literal(glob_path)}, hive_partitioning=true)
             """
         ).fetchone()
-        return {
+        output = {
             "rows": int(result[0]),
             "unique_keys": int(result[1]),
             "bad_buffer": int(result[2]),
             "bad_geometry_count": int(result[3]),
             "bad_valid_count": int(result[4]),
         }
+        if sensor == "s1" and semantic_s1:
+            output.update(
+                bad_s1_counts=int(result[5]),
+                bad_s1_domain=int(result[6]),
+                bad_s1_identity=int(result[7]),
+            )
+        return output
     finally:
         connection.close()
 
@@ -1043,7 +1144,11 @@ def validate(args: argparse.Namespace) -> None:
     if args.full and not report["failures"]:
         report["full_checks"] = {}
         for sensor in sensors:
-            result = full_validation_sql(run_dir, sensor)
+            semantic_s1 = (
+                sensor == "s1"
+                and manifest.get("input_kinds", {}).get("s1") == "weekly-linear"
+            )
+            result = full_validation_sql(run_dir, sensor, semantic_s1=semantic_s1)
             report["full_checks"][sensor] = result
             expected = int(manifest["expected_rows"][sensor])
             if result["rows"] != expected:
@@ -1055,6 +1160,10 @@ def validate(args: argparse.Namespace) -> None:
             for key in ("bad_buffer", "bad_geometry_count", "bad_valid_count"):
                 if result[key] != 0:
                     report["failures"].append(f"{sensor.upper()} {key}={result[key]:,}")
+            if semantic_s1:
+                for key in ("bad_s1_counts", "bad_s1_domain", "bad_s1_identity"):
+                    if result[key] != 0:
+                        report["failures"].append(f"S1 {key}={result[key]:,}")
 
     report["status"] = "passed" if not report["failures"] else "failed"
     report_path = run_dir / "validation_report.json"
@@ -1077,6 +1186,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--nakuru-layer", default="nakuru_fin")
     prepare_parser.add_argument("--s1-input-dir", required=True)
     prepare_parser.add_argument("--s2-input-dir", required=True)
+    prepare_parser.add_argument(
+        "--s1-input-kind",
+        choices=["indices", "weekly-linear"],
+        default="indices",
+        help="Read S1 five-band indices or the audited two-band weekly linear archive",
+    )
     prepare_parser.add_argument("--min-pixels", type=int, default=5)
     prepare_parser.add_argument("--tile-size", type=int, default=1024)
     prepare_parser.add_argument("--limit-fields", type=int, help="Pilot only: limit fields per region")
@@ -1089,6 +1204,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract_parser = subparsers.add_parser("extract", help="Extract weekly zonal statistics")
     extract_parser.add_argument("--run-dir", required=True)
     extract_parser.add_argument("--sensor", choices=["s1", "s2", "both"], default="both")
+    extract_parser.add_argument("--region", choices=["machakos", "nakuru", "both"], default="both")
     extract_parser.add_argument("--workers", type=int, default=2)
     extract_parser.add_argument("--batch-rows", type=int, default=500_000)
     extract_parser.add_argument("--duckdb-memory-limit", default="6GB")

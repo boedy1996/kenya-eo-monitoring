@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import threading
@@ -240,6 +241,31 @@ def clean_s1_linear_array(arr, nodata=None):
     arr[~np.isfinite(arr)] = np.nan
     arr[arr <= 0] = np.nan
     return arr
+
+
+def resolve_snap_vv_vh_bands(src, safe_name):
+    """Resolve SNAP polarizations without a silent positional fallback."""
+    resolved = {}
+    for idx, description in enumerate(src.descriptions, start=1):
+        normalized = re.sub(r"[^A-Z0-9]+", "", str(description or "").upper())
+        if "SIGMA0VV" in normalized or normalized == "VV":
+            resolved["VV"] = idx
+        if "SIGMA0VH" in normalized or normalized == "VH":
+            resolved["VH"] = idx
+
+    safe_upper = str(safe_name).upper()
+    if "VV" in resolved and ("VH" in resolved or "_1SSV_" in safe_upper):
+        return resolved["VV"], resolved.get("VH"), "band-descriptions"
+    if src.count == 1 and "_1SSV_" in safe_upper:
+        return 1, None, "safe-single-vv"
+    if src.count >= 2 and "_1SDV_" in safe_upper:
+        # The 2016-2026 archive audit found SNAP's undescribed dual-pol GeoTIFFs
+        # in VH,VV order. Keep this fallback explicit and product-code limited.
+        return 2, 1, "audited-dual-vh-vv"
+    raise ValueError(
+        f"Cannot resolve VV/VH bands for {safe_name}: "
+        f"count={src.count}, descriptions={src.descriptions!r}"
+    )
 
 
 def calc_backoff(attempt, base=8.0, max_wait=180.0, jitter=0.35):
@@ -1602,13 +1628,12 @@ def process_one_safe_to_temp_tile(
     with rasterio.open(snap_tif) as src:
         out_stack = np.full((len(TARGET_BANDS), height, width), np.nan, dtype=np.float32)
 
-        band_map = {}
-        for idx, desc in enumerate(src.descriptions, start=1):
-            if desc:
-                band_map[desc.upper()] = idx
-
-        vv_idx = band_map.get("SIGMA0_VV") or band_map.get("VV") or 1
-        vh_idx = band_map.get("SIGMA0_VH") or band_map.get("VH") or (2 if src.count >= 2 else None)
+        vv_idx, vh_idx, mapping_source = resolve_snap_vv_vh_bands(src, safe_name)
+        print(
+            f"[S1 BAND MAP] {safe_name} | VV=band{vv_idx} | "
+            f"VH={'band' + str(vh_idx) if vh_idx is not None else 'missing'} | "
+            f"source={mapping_source} | descriptions={src.descriptions!r}"
+        )
         src_indices = {"VV": vv_idx, "VH": vh_idx}
 
         with WarpedVRT(
@@ -1662,6 +1687,11 @@ def process_one_safe_to_temp_tile(
         dst.write(out_stack)
         for idx, name in enumerate(BAND_NAMES, start=1):
             dst.set_band_description(idx, name)
+        dst.update_tags(
+            S1_BAND_MAPPING_SOURCE=mapping_source,
+            S1_VV_SOURCE_BAND=str(vv_idx),
+            S1_VH_SOURCE_BAND=str(vh_idx) if vh_idx is not None else "missing",
+        )
 
     print(f"[OK] temp tile: {region_name} | {acq_date} | {tile_code} -> {out_path.name}")
     return out_path

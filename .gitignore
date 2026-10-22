@@ -47,6 +47,7 @@ venv/
 .venv/
 env/
 .env
+.python-version
 
 # ============================================================
 # Secrets / credentials
@@ -56,6 +57,21 @@ env/
 credentials*
 secrets*
 .env.*
+
+# Production runs and generated exports
+model_runs/
+zonal_runs/
+s1_bandfix_runs/
+exports/
+dashboard_exports/
+outputs/
+
+# Generated audit and delivery artifacts
+field_comparison/
+giuseppe_delivery/
+metadata_audit/
+s1_gee_audit/
+s1_bandfix/audit_results/
 
 # ============================================================
 # OS/editor files

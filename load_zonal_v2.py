@@ -10,6 +10,7 @@ checkpoint are committed in the same transaction.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import subprocess
 import tempfile
 import time
 import traceback
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -37,7 +39,7 @@ from zonal_center_pipeline import (
 )
 
 
-LOADER_VERSION = "1.0.0"
+LOADER_VERSION = "1.1.0"
 IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
@@ -184,7 +186,9 @@ $grant_copy$;
 def prepare_database(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir).resolve()
     manifest, inventory = load_run(run_dir)
-    tables = versioned_tables(run_dir)
+    sensors = list(SENSORS) if args.sensor == "both" else [args.sensor]
+    all_tables = versioned_tables(run_dir)
+    tables = {sensor: all_tables[sensor] for sensor in sensors}
     run_id = version_token(run_dir)
     years = sorted({int(str(value)[:4]) for value in inventory["start_date"]})
     existence = run_psql(
@@ -197,26 +201,30 @@ def prepare_database(args: argparse.Namespace) -> None:
     drop_sql = ""
     if args.recreate:
         drop_sql = "\n".join(f"DROP TABLE IF EXISTS timeseries.{table} CASCADE;" for table in tables.values())
+    create_sql = "\n".join(create_table_sql(sensor, tables[sensor], years) for sensor in sensors)
+    metadata_tables = {
+        sensor: tables.get(sensor, f"{sensor}_indices")
+        for sensor in SENSORS
+    }
     statement = fr"""
 \set ON_ERROR_STOP on
 BEGIN;
 {metadata_sql()}
 {drop_sql}
 DELETE FROM metadata.zonal_runs WHERE run_id = {sql_string(run_id)};
-{create_table_sql('s1', tables['s1'], years)}
-{create_table_sql('s2', tables['s2'], years)}
+{create_sql}
 INSERT INTO metadata.zonal_runs
     (run_id, run_dir, pipeline_version, loader_version, s1_table, s2_table, status, updated_at)
 VALUES (
     {sql_string(run_id)}, {sql_string(run_dir)},
     {sql_string(manifest.get('pipeline_version', PIPELINE_VERSION))}, {sql_string(LOADER_VERSION)},
-    {sql_string(tables['s1'])}, {sql_string(tables['s2'])}, 'prepared', now()
+    {sql_string(metadata_tables['s1'])}, {sql_string(metadata_tables['s2'])}, 'prepared', now()
 );
 COMMIT;
 """
     run_psql(args, statement)
     atomic_write_json(run_dir / "database_state.json", {
-        "run_id": run_id, "run_dir": str(run_dir), "tables": tables,
+        "run_id": run_id, "run_dir": str(run_dir), "tables": tables, "sensors": sensors,
         "years": years, "prepared_at_utc": utc_now(),
     })
     log(f"Prepared shadow tables: {tables}")
@@ -227,7 +235,9 @@ def read_database_state(run_dir: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Run database prepare first: {path}")
     state = json.loads(path.read_text())
-    if state.get("tables") != versioned_tables(run_dir):
+    sensors = state.get("sensors", list(SENSORS))
+    expected = versioned_tables(run_dir)
+    if state.get("tables") != {sensor: expected[sensor] for sensor in sensors}:
         raise ValueError(f"Database state does not match this run: {path}")
     return state
 
@@ -297,16 +307,54 @@ COMMIT;
 """
 
 
+def load_part_worker(task: dict[str, Any]) -> dict[str, Any]:
+    """Convert and load one part in a separate process."""
+    sensor = task["sensor"]
+    record = RasterRecord(**task["record"])
+    part = Path(task["part"])
+    temp_root = Path(task["temp_root"])
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f"zonal-{sensor}-{record.start_date}-", suffix=".csv", dir=temp_root
+    )
+    os.close(descriptor)
+    csv_path = Path(temporary_name)
+    started = time.monotonic()
+    psql_args = argparse.Namespace(
+        psql_command=task["psql_command"],
+        database=task["database"],
+    )
+    try:
+        copied = parquet_to_csv(part, csv_path, sensor, task["batch_rows"])
+        run_psql(psql_args, copy_part_sql(
+            task["table_name"], task["columns"], csv_path, task["run_id"], sensor,
+            task["relative_part"], record.raster_file, copied,
+        ))
+        return {
+            "sensor": sensor,
+            "position": task["position"],
+            "total": task["total"],
+            "part": str(part),
+            "rows": copied,
+            "elapsed": time.monotonic() - started,
+        }
+    finally:
+        csv_path.unlink(missing_ok=True)
+
+
 def load_parts(args: argparse.Namespace) -> None:
     run_dir = Path(args.run_dir).resolve()
     _, inventory = load_run(run_dir)
     state = read_database_state(run_dir)
     sensors = list(SENSORS) if args.sensor == "both" else [args.sensor]
+    unavailable = set(sensors) - set(state.get("sensors", list(SENSORS)))
+    if unavailable:
+        raise ValueError(f"Database run was not prepared for sensors: {sorted(unavailable)}")
     checkpoints = loaded_checkpoints(args, state["run_id"])
     failures: list[dict[str, str]] = []
     temp_root = Path(args.temp_dir)
     temp_root.mkdir(parents=True, exist_ok=True)
     os.chmod(temp_root, 0o755)
+    tasks: list[dict[str, Any]] = []
     for sensor in sensors:
         rows = inventory[inventory.sensor == sensor].sort_values(["start_date", "region"])
         table_name = state["tables"][sensor]
@@ -318,30 +366,46 @@ def load_parts(args: argparse.Namespace) -> None:
             if (sensor, relative_part) in checkpoints:
                 log(f"{sensor.upper()} {position}/{len(rows)} skipped: {part.name}")
                 continue
-            descriptor, temporary_name = tempfile.mkstemp(
-                prefix=f"zonal-{sensor}-{record.start_date}-", suffix=".csv", dir=temp_root
-            )
-            os.close(descriptor)
-            csv_path = Path(temporary_name)
-            started = time.monotonic()
+            tasks.append({
+                "sensor": sensor,
+                "position": position,
+                "total": len(rows),
+                "part": str(part),
+                "relative_part": relative_part,
+                "table_name": table_name,
+                "columns": columns,
+                "record": asdict(record),
+                "temp_root": str(temp_root),
+                "run_id": state["run_id"],
+                "psql_command": args.psql_command,
+                "database": args.database,
+                "batch_rows": args.batch_rows,
+            })
+
+    if not tasks:
+        log("No unloaded Parquet parts remain")
+        return
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as executor:
+        future_tasks = {executor.submit(load_part_worker, task): task for task in tasks}
+        for future in concurrent.futures.as_completed(future_tasks):
+            task = future_tasks[future]
             try:
-                copied = parquet_to_csv(part, csv_path, sensor, args.batch_rows)
-                run_psql(args, copy_part_sql(
-                    table_name, columns, csv_path, state["run_id"], sensor,
-                    relative_part, record.raster_file, copied,
-                ))
-                checkpoints.add((sensor, relative_part))
+                result = future.result()
                 log(
-                    f"{sensor.upper()} {position}/{len(rows)} loaded {copied:,} rows: "
-                    f"{part.name} ({time.monotonic() - started:.1f}s)"
+                    f"{result['sensor'].upper()} {result['position']}/{result['total']} "
+                    f"loaded {result['rows']:,} rows: {Path(result['part']).name} "
+                    f"({result['elapsed']:.1f}s)"
                 )
             except Exception as exc:
-                failures.append({"sensor": sensor, "part": str(part), "error": str(exc)})
-                log(f"FAILED loading {part}: {exc}")
+                failure = {
+                    "sensor": task["sensor"],
+                    "part": str(task["part"]),
+                    "error": str(exc),
+                }
+                failures.append(failure)
+                log(f"FAILED loading {task['part']}: {exc}")
                 if not args.continue_on_error:
                     raise
-            finally:
-                csv_path.unlink(missing_ok=True)
     if failures:
         atomic_write_json(run_dir / "database_load_failures.json", failures)
         raise RuntimeError(f"Database load completed with {len(failures)} failures")
@@ -352,7 +416,11 @@ def finalize_indexes(args: argparse.Namespace) -> None:
     state = read_database_state(run_dir)
     statements = ["\\set ON_ERROR_STOP on"]
     token = checked_identifier("i_" + state["run_id"][-8:])
-    for sensor in SENSORS:
+    sensors = list(SENSORS) if args.sensor == "both" else [args.sensor]
+    unavailable = set(sensors) - set(state.get("sensors", list(SENSORS)))
+    if unavailable:
+        raise ValueError(f"Database run was not prepared for sensors: {sorted(unavailable)}")
+    for sensor in sensors:
         table = checked_identifier(state["tables"][sensor])
         statements.extend([
             f"CREATE INDEX IF NOT EXISTS {sensor}_{token}_date_field_idx ON timeseries.{table} (start_date, field_id);",
@@ -370,7 +438,11 @@ def validate_database(args: argparse.Namespace) -> None:
     report: dict[str, Any] = {
         "run_id": state["run_id"], "checked_at_utc": utc_now(), "sensors": {}, "failures": [],
     }
-    for sensor in SENSORS:
+    sensors = list(SENSORS) if args.sensor == "both" else [args.sensor]
+    unavailable = set(sensors) - set(state.get("sensors", list(SENSORS)))
+    if unavailable:
+        raise ValueError(f"Database run was not prepared for sensors: {sorted(unavailable)}")
+    for sensor in sensors:
         table = checked_identifier(state["tables"][sensor])
         count_condition = " OR ".join(
             f"{band}_count < 0 OR {band}_count > pixel_count_after" for band in BANDS[sensor]
@@ -437,7 +509,11 @@ def swap_tables(args: argparse.Namespace) -> None:
         "\\set ON_ERROR_STOP on", "BEGIN;",
         "SELECT pg_advisory_xact_lock(hashtext('kenya_zonal_table_swap'));",
     ]
-    for sensor in SENSORS:
+    sensors = list(SENSORS) if args.sensor == "both" else [args.sensor]
+    unavailable = set(sensors) - set(state.get("sensors", list(SENSORS)))
+    if unavailable:
+        raise ValueError(f"Database run was not prepared for sensors: {sorted(unavailable)}")
+    for sensor in sensors:
         current = checked_identifier(f"{sensor}_indices")
         legacy = checked_identifier(f"{current}_legacy_{suffix}")
         next_table = checked_identifier(state["tables"][sensor])
@@ -468,6 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prepare_parser = subparsers.add_parser("prepare", help="Create versioned shadow tables")
     add_common_arguments(prepare_parser)
+    prepare_parser.add_argument("--sensor", choices=["s1", "s2", "both"], default="both")
     prepare_parser.add_argument("--recreate", action="store_true")
     prepare_parser.set_defaults(func=prepare_database)
 
@@ -475,20 +552,24 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_arguments(load_parser)
     load_parser.add_argument("--sensor", choices=["s1", "s2", "both"], default="both")
     load_parser.add_argument("--batch-rows", type=int, default=25_000)
+    load_parser.add_argument("--workers", type=int, default=1)
     load_parser.add_argument("--temp-dir", default="/tmp/zonal-db-load")
     load_parser.add_argument("--continue-on-error", action="store_true")
     load_parser.set_defaults(func=load_parts)
 
     finalize_parser = subparsers.add_parser("finalize", help="Create indexes and ANALYZE shadow tables")
     add_common_arguments(finalize_parser)
+    finalize_parser.add_argument("--sensor", choices=["s1", "s2", "both"], default="both")
     finalize_parser.set_defaults(func=finalize_indexes)
 
     validate_parser = subparsers.add_parser("validate", help="Validate shadow tables")
     add_common_arguments(validate_parser)
+    validate_parser.add_argument("--sensor", choices=["s1", "s2", "both"], default="both")
     validate_parser.set_defaults(func=validate_database)
 
     swap_parser = subparsers.add_parser("swap", help="Atomically replace both production tables")
     add_common_arguments(swap_parser)
+    swap_parser.add_argument("--sensor", choices=["s1", "s2", "both"], default="both")
     swap_parser.add_argument("--legacy-suffix")
     swap_parser.set_defaults(func=swap_tables)
     return parser
@@ -497,6 +578,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if getattr(args, "workers", 1) < 1:
+        parser.error("--workers must be at least 1")
     try:
         args.func(args)
         return 0

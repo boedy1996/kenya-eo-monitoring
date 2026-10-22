@@ -64,7 +64,29 @@ def format_eta(seconds):
         return f"{m}m {s}s"
     return f"{s}s"
 
-def process_tif(input_path, output_dir, logger, overwrite=False):
+def map_source_bands(band1, band2, source_layout):
+    band1 = band1.astype(np.float32, copy=False)
+    band2 = band2.astype(np.float32, copy=False)
+    band1[~np.isfinite(band1) | (band1 <= 0)] = np.nan
+    band2[~np.isfinite(band2) | (band2 <= 0)] = np.nan
+    if source_layout == "vv-vh":
+        return band1, band2
+    if source_layout == "vh-vv":
+        return band2, band1
+    if source_layout != "audited-weekly":
+        raise ValueError(f"Unknown source layout: {source_layout}")
+
+    valid1 = np.isfinite(band1)
+    valid2 = np.isfinite(band2)
+    vv = np.full(band1.shape, np.nan, dtype=np.float32)
+    vh = np.full(band1.shape, np.nan, dtype=np.float32)
+    vv[valid2] = band2[valid2]
+    vv[valid1 & ~valid2] = band1[valid1 & ~valid2]
+    vh[valid1 & valid2] = band1[valid1 & valid2]
+    return vv, vh
+
+
+def process_tif(input_path, output_dir, logger, overwrite=False, source_layout="audited-weekly"):
     base = os.path.splitext(os.path.basename(input_path))[0]
     output_path = os.path.join(output_dir, f"{base}_indices.tif")
 
@@ -77,13 +99,15 @@ def process_tif(input_path, output_dir, logger, overwrite=False):
             logger.warning(f"SKIP | band kurang dari 2 | {input_path}")
             return "skip"
 
-        vv = src.read(1).astype(np.float32)  # Band 1 = VV
-        vh = src.read(2).astype(np.float32)  # Band 2 = VH
+        band1 = src.read(1).astype(np.float32)
+        band2 = src.read(2).astype(np.float32)
 
         nodata = src.nodata
         if nodata is not None:
-            vv[vv == nodata] = np.nan
-            vh[vh == nodata] = np.nan
+            band1[band1 == nodata] = np.nan
+            band2[band2 == nodata] = np.nan
+
+        vv, vh = map_source_bands(band1, band2, source_layout)
 
         sigma_vv_linear, sigma_vh_linear, p_ratio, rvi, rcspr = compute_indices(vv, vh)
 
@@ -107,6 +131,14 @@ def process_tif(input_path, output_dir, logger, overwrite=False):
             dst.set_band_description(3, "p_ratio")
             dst.set_band_description(4, "RVI")
             dst.set_band_description(5, "RCSPR")
+            dst.update_tags(
+                S1_SOURCE_LAYOUT=source_layout,
+                S1_MAPPING_RULE=(
+                    "paired:band1=VH,band2=VV;band1-only:band1=VV"
+                    if source_layout == "audited-weekly"
+                    else source_layout
+                ),
+            )
 
     logger.info(f"OK   | saved | {output_path}")
     return "ok"
@@ -139,6 +171,12 @@ def main():
         "--overwrite",
         action="store_true",
         help="Timpa output jika sudah ada"
+    )
+    parser.add_argument(
+        "--source-layout",
+        choices=["audited-weekly", "vv-vh", "vh-vv"],
+        default="audited-weekly",
+        help="Source band mapping. Default uses the audited historical weekly archive rule.",
     )
 
     args = parser.parse_args()
@@ -190,7 +228,8 @@ def main():
                 input_path=tif,
                 output_dir=output_dir,
                 logger=logger,
-                overwrite=args.overwrite
+                overwrite=args.overwrite,
+                source_layout=args.source_layout,
             )
             if result == "ok":
                 ok_count += 1
