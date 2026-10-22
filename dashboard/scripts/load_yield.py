@@ -40,6 +40,14 @@ YIELD_COLUMNS = [
     "yield_status", "qa_flags",
 ]
 
+# PostgreSQL folds unquoted identifiers to lower case. Keep the Parquet
+# contract unchanged, but target the physical database column names when
+# streaming CSV into seasonal_yield.
+DATABASE_COLUMN_OVERRIDES = {
+    "seasonal_npp_gC_m2": "seasonal_npp_gc_m2",
+    "tbp_tDM_ha": "tbp_tdm_ha",
+}
+
 
 def log(message: str) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -189,7 +197,10 @@ def load_season(
         csv_path = Path(handle.name)
     try:
         parquet_to_csv(path, csv_path)
-        columns = ", ".join(f'"{column}"' for column in YIELD_COLUMNS)
+        columns = ", ".join(
+            f'"{DATABASE_COLUMN_OVERRIDES.get(column, column)}"'
+            for column in YIELD_COLUMNS
+        )
         with conn.transaction():
             conn.execute(
                 "DELETE FROM dashboard.seasonal_yield WHERE yield_run_id = %s AND season_code = %s",
