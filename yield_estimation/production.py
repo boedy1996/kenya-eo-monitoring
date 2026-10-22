@@ -84,7 +84,15 @@ def psql_copy_path(psql_command: str, query: str, path: Path) -> None:
     with temp.open("w") as stream:
         completed = subprocess.run(
             command,
-            input=f"COPY ({query}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE);\n",
+            # The seasonal signal exports join hundreds of thousands of model
+            # rows to one year partition. PostgreSQL underestimates the
+            # lower(seasonal_label) filter and otherwise chooses millions of
+            # random nested-loop lookups. A parallel hash join reads the year
+            # partition sequentially and is substantially faster here.
+            input=(
+                "SET enable_nestloop = off;\n"
+                f"COPY ({query}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE);\n"
+            ),
             text=True,
             stdout=stream,
             stderr=subprocess.PIPE,
