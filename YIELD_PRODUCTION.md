@@ -78,7 +78,7 @@ Apply dashboard migrations, then load and atomically activate the yield run:
 sudo -u postgres env \
   DATABASE_URL='postgresql:///kenya_monitoring?host=/var/run/postgresql' \
   /opt/kenya-dashboard/venv/bin/python \
-  /opt/project/dashboard/scripts/migrate.py
+  /opt/kenya-dashboard/current/dashboard/scripts/migrate.py
 
 nohup env RUN_ID="$RUN_ID" ./run_yield_production.sh load-dashboard \
   > "/opt/project/yield_runs/logs/${RUN_ID}-load-dashboard.log" 2>&1 &
