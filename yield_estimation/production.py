@@ -265,16 +265,49 @@ def inventory(args: argparse.Namespace) -> None:
         records.append(row)
         log(f"Inventory {position}/{len(frame)} {row['code']} available={row['available']}")
     output = pd.DataFrame(records)
+    missing = output.loc[~output.available, "code"].tolist()
+    coverage = (
+        output.groupby("season_code", sort=False)
+        .agg(requested_periods=("code", "count"), available_periods=("available", "sum"))
+        .reset_index()
+    )
+    coverage["complete"] = coverage.available_periods.eq(coverage.requested_periods)
+    supported = coverage.loc[coverage.complete, "season_code"].astype(str).tolist()
+    unsupported = coverage.loc[~coverage.complete].to_dict("records")
+    if not supported:
+        raise RuntimeError("No season has complete WaPOR NPP coverage")
+    selected_periods = output[output.season_code.isin(supported)].copy()
     path = args.run_dir / "inventory" / "periods.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
-    output.to_parquet(path, index=False)
-    missing = output.loc[~output.available, "code"].tolist()
+    selected_periods.to_parquet(path, index=False)
+    coverage.to_csv(args.run_dir / "inventory" / "season_coverage.csv", index=False)
+
+    seasons_path = args.run_dir / "seasons.parquet"
+    selected_seasons = seasons[seasons.season_code.isin(supported)].copy()
+    selected_seasons.to_parquet(seasons_path, index=False)
+    manifest_path = args.run_dir / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["model_complete_season_count"] = int(len(seasons))
+    manifest["model_complete_season_codes"] = seasons.season_code.astype(str).tolist()
+    manifest["season_count"] = int(len(selected_seasons))
+    manifest["season_codes"] = selected_seasons.season_code.astype(str).tolist()
+    manifest["wapor_excluded_seasons"] = unsupported
+    write_json(manifest_path, manifest)
     write_json(
         args.run_dir / "inventory" / "summary.json",
-        {"requested_periods": len(output), "available_periods": int(output.available.sum()), "missing_codes": missing},
+        {
+            "requested_periods": len(output),
+            "available_periods": int(output.available.sum()),
+            "selected_periods": len(selected_periods),
+            "selected_seasons": supported,
+            "excluded_seasons": unsupported,
+            "missing_codes": missing,
+        },
     )
-    if missing:
-        raise RuntimeError(f"Missing {len(missing)} WaPOR periods")
+    log(
+        f"Selected {len(supported)} seasons with complete WaPOR coverage; "
+        f"excluded {len(unsupported)} incomplete seasons"
+    )
 
 
 def _clip_one(task: tuple[str, str, list[float], str, str]) -> dict[str, Any]:
