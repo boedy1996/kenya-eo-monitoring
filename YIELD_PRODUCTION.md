@@ -4,8 +4,9 @@ This workflow calculates remote sensing yield estimates for every field in the
 active crop model and every complete model season. Long Rains runs from 1 March
 through 31 August. Short Rains runs from 1 October through the end of February.
 Calendar-complete seasons are also required to fit fully within the active
-model run's date range. Boundary seasons with partial model history are kept in
-the crop dashboard but do not receive a yield estimate.
+model run's date range and have every required WaPOR NPP dekad. Boundary
+seasons with partial model history and seasons with incomplete WaPOR coverage
+are kept in the crop dashboard but do not receive a yield estimate.
 
 The output remains labelled **calculated, unvalidated** because observed crop
 cuts are not available. Fields classified as unsupported, non-final, mixed, or
@@ -15,7 +16,8 @@ reason.
 ## Data flow
 
 1. Inventory fields and complete seasons from PostGIS.
-2. Inventory and clip FAO WaPOR dekadal NPP rasters for Machakos and Nakuru.
+2. Inventory FAO WaPOR dekadal NPP, retain only seasons with complete source
+   coverage, and clip the rasters for Machakos and Nakuru.
 3. Cache exact field-to-pixel fractional coverage weights once per county.
 4. Extract NPP for all fields and dekads with the cached weights.
 5. Derive field phenology from weekly S2 NDVI, EVI and LAI plus S1 RVI.
