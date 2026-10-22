@@ -13,7 +13,11 @@ from yield_estimation.core import (
     integrate_field_npp,
     season_bounds,
 )
-from yield_estimation.pipeline import classify_intercrop, survey_crop_matches
+from yield_estimation.pipeline import (
+    classify_intercrop,
+    decode_exactextract_mean,
+    survey_crop_matches,
+)
 
 
 class YieldCoreTests(unittest.TestCase):
@@ -86,6 +90,12 @@ class YieldCoreTests(unittest.TestCase):
         self.assertTrue(survey_crop_matches("potatoes", "irish_potato"))
         self.assertFalse(survey_crop_matches("beans", "maize"))
         self.assertIsNone(survey_crop_matches("maize", np.nan))
+
+    def test_exactextract_mean_is_already_scaled(self):
+        raw, physical = decode_exactextract_mean(pd.Series([2.5, np.nan]), 0.001, 0.0)
+        self.assertAlmostEqual(physical.iloc[0], 2.5)
+        self.assertAlmostEqual(raw.iloc[0], 2500.0)
+        self.assertTrue(pd.isna(physical.iloc[1]))
 
 
 if __name__ == "__main__":

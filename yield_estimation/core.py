@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 
-METHOD_VERSION = "wapor-npp-literature-v1"
+METHOD_VERSION = "wapor-npp-literature-v1.1"
 PHENOLOGY_VERSION = "optical-rvi-relative-threshold-v1"
 NPP_TO_TBP = 0.022222
 
