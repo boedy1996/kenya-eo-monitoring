@@ -60,6 +60,7 @@ secrets*
 
 # Production runs and generated exports
 model_runs/
+yield_runs/
 zonal_runs/
 s1_bandfix_runs/
 exports/
