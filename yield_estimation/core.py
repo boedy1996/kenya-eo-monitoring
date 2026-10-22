@@ -223,6 +223,187 @@ def derive_phenology(
     }
 
 
+def _normalize_matrix(values: np.ndarray) -> np.ndarray:
+    """Robust row-wise normalization used by the production phenology path."""
+    values = np.asarray(values, dtype=np.float32)
+    output = np.full(values.shape, np.nan, dtype=np.float32)
+    counts = np.isfinite(values).sum(axis=1)
+    eligible = counts >= 3
+    if not eligible.any():
+        return output
+    subset = values[eligible]
+    with np.errstate(all="ignore"):
+        low = np.nanquantile(subset, 0.1, axis=1)
+        high = np.nanquantile(subset, 0.9, axis=1)
+    span = high - low
+    usable = np.isfinite(span) & (span > 1e-8)
+    normalized = np.full(subset.shape, np.nan, dtype=np.float32)
+    normalized[usable] = np.clip(
+        (subset[usable] - low[usable, None]) / span[usable, None], 0, 1
+    )
+    output[eligible] = normalized
+    return output
+
+
+def _interpolate_short_gaps(values: np.ndarray, limit: int = 2) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    result = values.copy()
+    valid = np.isfinite(values)
+    width = values.shape[1]
+    positions = np.arange(width, dtype=np.int16)[None, :]
+    previous = np.maximum.accumulate(np.where(valid, positions, -1), axis=1)
+    following = np.minimum.accumulate(
+        np.where(valid, positions, width)[:, ::-1], axis=1
+    )[:, ::-1]
+    missing = ~valid
+
+    interior = missing & (previous >= 0) & (following < width)
+    gap = following - previous - 1
+    interior &= gap <= limit
+    rows, cols = np.where(interior)
+    if len(rows):
+        left = values[rows, previous[rows, cols]]
+        right = values[rows, following[rows, cols]]
+        fraction = (cols - previous[rows, cols]) / (
+            following[rows, cols] - previous[rows, cols]
+        )
+        result[rows, cols] = left + (right - left) * fraction
+
+    leading = missing & (previous < 0) & (following < width) & (following <= limit)
+    rows, cols = np.where(leading)
+    if len(rows):
+        result[rows, cols] = values[rows, following[rows, cols]]
+    trailing = missing & (previous >= 0) & (following >= width) & ((positions - previous) <= limit)
+    rows, cols = np.where(trailing)
+    if len(rows):
+        result[rows, cols] = values[rows, previous[rows, cols]]
+    return result
+
+
+def derive_phenology_matrix(
+    field_ids: np.ndarray,
+    week_dates: np.ndarray,
+    ndvi: np.ndarray,
+    evi: np.ndarray,
+    lai: np.ndarray,
+    rvi: np.ndarray,
+    season_start: date,
+    season_end: date,
+    *,
+    threshold_fraction: float = 0.20,
+    minimum_optical_weeks: int = 6,
+) -> pd.DataFrame:
+    """Vectorized production equivalent of :func:`derive_phenology`.
+
+    Arrays are shaped ``(fields, weeks)`` and share one ordered weekly axis.
+    The result retains the conservative full-season and one-boundary fallbacks
+    while avoiding one Python/Pandas object per production field.
+    """
+    field_ids = np.asarray(field_ids)
+    week_dates = np.asarray(week_dates, dtype="datetime64[D]")
+    matrices = [np.asarray(value, dtype=np.float32) for value in (ndvi, evi, lai, rvi)]
+    if not matrices or any(value.shape != matrices[0].shape for value in matrices):
+        raise ValueError("Phenology matrices must have the same shape")
+    if matrices[0].shape != (len(field_ids), len(week_dates)):
+        raise ValueError("Phenology matrix axes do not match field IDs and dates")
+
+    optical_stack = np.stack([_normalize_matrix(value) for value in matrices[:3]], axis=2)
+    with np.errstate(all="ignore"):
+        optical = np.nanmedian(optical_stack, axis=2).astype(np.float32)
+    optical[np.all(~np.isfinite(optical_stack), axis=2)] = np.nan
+    optical_valid = np.isfinite(optical).sum(axis=1)
+    rvi_normalized = _normalize_matrix(matrices[3])
+    sar_support = ((~np.isfinite(optical)) & np.isfinite(rvi_normalized)).sum(axis=1)
+    signal = np.where(np.isfinite(optical), optical, rvi_normalized)
+    signal = _interpolate_short_gaps(signal, limit=2)
+    padded = np.pad(signal, ((0, 0), (1, 1)), constant_values=np.nan)
+    rolling_stack = np.stack(
+        [padded[:, :-2], padded[:, 1:-1], padded[:, 2:]], axis=2
+    )
+    with np.errstate(all="ignore"):
+        smoothed = np.nanmedian(rolling_stack, axis=2).astype(np.float32)
+    smoothed[np.all(~np.isfinite(rolling_stack), axis=2)] = np.nan
+    valid = np.isfinite(smoothed)
+    valid_count = valid.sum(axis=1)
+
+    safe = np.where(valid, smoothed, -np.inf)
+    peak_index = np.argmax(safe, axis=1)
+    has_signal = valid_count > 0
+    peak_value = safe[np.arange(len(field_ids)), peak_index]
+    forward_rank = np.cumsum(valid, axis=1)
+    reverse_rank = np.cumsum(valid[:, ::-1], axis=1)[:, ::-1]
+    edge_mask = valid & ((forward_rank <= 3) | (reverse_rank <= 3))
+    with np.errstate(all="ignore"):
+        baseline = np.nanmedian(np.where(edge_mask, smoothed, np.nan), axis=1)
+    amplitude = peak_value - baseline
+    threshold = baseline + threshold_fraction * amplitude
+
+    columns = np.arange(len(week_dates))[None, :]
+    above = valid & (smoothed >= threshold[:, None]) & (columns <= peak_index[:, None])
+    below = valid & (smoothed <= threshold[:, None]) & (columns >= peak_index[:, None])
+    above_pairs = above[:, :-1] & above[:, 1:]
+    below_pairs = below[:, :-1] & below[:, 1:]
+    has_sos = above_pairs.any(axis=1)
+    has_eos = below_pairs.any(axis=1)
+    sos_index = np.argmax(above_pairs, axis=1)
+    eos_index = np.argmax(below_pairs, axis=1)
+    both = has_sos & has_eos
+
+    start_value = np.datetime64(season_start)
+    end_value = np.datetime64(season_end)
+    sos = np.full(len(field_ids), start_value, dtype="datetime64[D]")
+    eos = np.full(len(field_ids), end_value, dtype="datetime64[D]")
+    sos[has_sos] = week_dates[sos_index[has_sos]]
+    eos[has_eos] = week_dates[eos_index[has_eos]]
+    peak_date = np.full(len(field_ids), "NaT", dtype="datetime64[D]")
+    peak_date[has_signal] = week_dates[peak_index[has_signal]]
+    invalid_order = has_signal & (
+        (sos > peak_date) | (eos < peak_date) | (sos >= eos)
+    )
+    sos[invalid_order] = start_value
+    eos[invalid_order] = end_value
+    has_sos[invalid_order] = False
+    has_eos[invalid_order] = False
+    both = has_sos & has_eos
+
+    insufficient = (optical_valid < minimum_optical_weeks) | (valid_count < minimum_optical_weeks)
+    weak = (~insufficient) & (~np.isfinite(amplitude) | (amplitude < 0.20))
+    detected = (~insufficient) & (~weak)
+    sos[insufficient | weak] = start_value
+    eos[insufficient | weak] = end_value
+
+    qa = np.full(len(field_ids), "partial_boundary_fallback", dtype=object)
+    qa[detected & both] = "detected"
+    qa[insufficient] = "insufficient_optical_weeks"
+    qa[insufficient & ~has_signal] = "no_weekly_signal"
+    qa[weak] = "weak_seasonal_amplitude"
+    method = np.full(
+        len(field_ids), f"{PHENOLOGY_VERSION}-matrix-one-boundary-fallback", dtype=object
+    )
+    method[detected & both] = f"{PHENOLOGY_VERSION}-matrix"
+    method[insufficient | weak] = "full-season-fallback"
+
+    coverage_score = np.minimum(1.0, optical_valid / max(1, len(week_dates)))
+    confidence = np.minimum(0.95, 0.35 + 0.35 * coverage_score + 0.25 * np.minimum(1.0, amplitude))
+    confidence[detected & ~both] *= 0.65
+    confidence[weak] = 0.2
+    confidence[insufficient] = np.where(has_signal[insufficient], 0.15, 0.0)
+
+    return pd.DataFrame(
+        {
+            "field_id": field_ids,
+            "sos": pd.to_datetime(sos),
+            "peak_date": pd.to_datetime(peak_date),
+            "eos": pd.to_datetime(eos),
+            "method": method,
+            "confidence": np.round(confidence.astype(float), 4),
+            "qa_status": qa,
+            "optical_valid_weeks": optical_valid.astype(np.int16),
+            "sar_supported_weeks": sar_support.astype(np.int16),
+        }
+    )
+
+
 def integrate_field_npp(
     npp: pd.DataFrame,
     sos: date,
