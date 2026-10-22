@@ -63,7 +63,9 @@ export function FilterBar({ catalog, weeks, seasons, filters, onChange }: Props)
         </span>
         <strong>
           {filters.mode === "seasonal"
-            ? selectedSeason?.is_complete ? "Final" : "Provisional"
+            ? selectedSeason?.yield_available
+              ? "Final · Yield available"
+              : selectedSeason?.is_complete ? "Final · Yield pending" : "Provisional"
             : selectedWeek?.week_in_season ? `Horizon ${selectedWeek.week_in_season}` : "No horizon"}
         </strong>
       </div>

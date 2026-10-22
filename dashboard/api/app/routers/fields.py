@@ -125,15 +125,38 @@ async def field_seasonal_detail(
                        p.appearance_count, p.vote_share,
                        p.median_confidence, p.maximum_confidence,
                        p.runner_up_label, p.runner_up_confidence,
-                       p.confidence_margin, p.method_version
+                       p.confidence_margin, p.method_version,
+                       yr.yield_run_id,
+                       y.yield_status, y.qa_flags AS yield_qa_flags,
+                       y.area_ha AS yield_area_ha, y.area_method,
+                       y.intercrop_status, y.survey_crop_text, y.survey_crop_match,
+                       y.sos, y.peak_date, y.eos,
+                       y.phenology_method, y.phenology_confidence,
+                       y.phenology_qa_status,
+                       y.optical_valid_weeks, y.sar_supported_weeks,
+                       y.seasonal_npp_gC_m2, y.npp_temporal_coverage,
+                       y.npp_mean_spatial_coverage, y.npp_mean_effective_pixels,
+                       y.tbp_tDM_ha,
+                       y.yield_low_t_ha, y.yield_central_t_ha, y.yield_high_t_ha,
+                       y.production_low_t, y.production_central_t, y.production_high_t,
+                       y.phenology_narrow_central_yield_t_ha,
+                       y.phenology_wide_central_yield_t_ha,
+                       y.parameter_set_id AS yield_parameter_set_id,
+                       y.method_version AS yield_method_version
                 FROM dashboard.fields AS f
                 LEFT JOIN dashboard.seasonal_predictions AS p
                   ON p.field_id = f.field_id
                  AND p.model_run_id = %s
                  AND p.season_code = %s
+                LEFT JOIN dashboard.yield_runs AS yr
+                  ON yr.model_run_id = %s AND yr.is_active
+                LEFT JOIN dashboard.seasonal_yield AS y
+                  ON y.yield_run_id = yr.yield_run_id
+                 AND y.field_id = f.field_id
+                 AND y.season_code = %s
                 WHERE f.field_id = %s
                 """,
-                (run_id, season, field_id),
+                (run_id, season, run_id, season, field_id),
             )
         ).fetchone()
     if not row:

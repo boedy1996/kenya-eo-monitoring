@@ -5,6 +5,7 @@ import { api } from "./api";
 import { FilterBar } from "./components/FilterBar";
 import { KpiStrip } from "./components/KpiStrip";
 import { MapPanel } from "./components/MapPanel";
+import { YieldSummary } from "./components/YieldSummary";
 import type { Filters } from "./types";
 
 const initialFilters: Filters = {
@@ -35,9 +36,11 @@ export default function App() {
   }, [filters.week, weeks.data]);
   useEffect(() => {
     if (!filters.season && seasons.data?.seasons.length) {
+      const available = seasons.data.seasons.filter((season) => season.yield_available).at(-1);
+      const complete = seasons.data.seasons.filter((season) => season.is_complete).at(-1);
       setFilters((current) => ({
         ...current,
-        season: seasons.data!.seasons.at(-1)!.season_code,
+        season: (available ?? complete ?? seasons.data!.seasons.at(-1)!).season_code,
       }));
     }
   }, [filters.season, seasons.data]);
@@ -46,6 +49,11 @@ export default function App() {
     queryKey: ["summary", filters],
     queryFn: () => api.summary(filters),
     enabled: filters.mode === "weekly" ? Boolean(filters.week) : Boolean(filters.season),
+  });
+  const yieldSummary = useQuery({
+    queryKey: ["seasonal-yield-summary", filters.season, filters.county, filters.label],
+    queryFn: () => api.seasonalYieldSummary(filters),
+    enabled: filters.mode === "seasonal" && Boolean(filters.season),
   });
   const searchResults = useQuery({
     queryKey: ["field-search", search],
@@ -135,6 +143,7 @@ export default function App() {
             <span>{filters.mode === "seasonal" ? filters.season : filters.week}</span>
           </div>
           <KpiStrip groups={summary.data?.groups ?? []} />
+          {filters.mode === "seasonal" && <YieldSummary data={yieldSummary.data} />}
           <section className="model-note">
             <h3>How to read this map</h3>
             <p>

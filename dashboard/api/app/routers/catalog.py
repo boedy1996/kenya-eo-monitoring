@@ -80,10 +80,20 @@ async def seasons(
         rows = await (
             await conn.execute(
                 """
-                SELECT season_code, season_year, season_kind, season_name,
-                       season_start, season_end, is_complete, method_version
-                FROM dashboard.season_definitions
-                WHERE model_run_id = %s
+                SELECT d.season_code, d.season_year, d.season_kind, d.season_name,
+                       d.season_start, d.season_end, d.is_complete, d.method_version,
+                       (ys.season_code IS NOT NULL) AS yield_available,
+                       yr.yield_run_id, yr.method_version AS yield_method_version
+                FROM dashboard.season_definitions AS d
+                LEFT JOIN dashboard.yield_runs AS yr
+                  ON yr.model_run_id = d.model_run_id AND yr.is_active
+                LEFT JOIN (
+                    SELECT DISTINCT yield_run_id, season_code
+                    FROM dashboard.seasonal_yield_summary
+                ) AS ys
+                  ON ys.yield_run_id = yr.yield_run_id
+                 AND ys.season_code = d.season_code
+                WHERE d.model_run_id = %s
                 ORDER BY season_start
                 """,
                 (run_id,),

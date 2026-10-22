@@ -7,6 +7,7 @@ import type {
   SeasonalFieldDetail,
   SignalRow,
   SummaryGroup,
+  SeasonalYieldSummary,
   Week,
 } from "./types";
 
@@ -42,6 +43,12 @@ export const api = {
     if (filters.reason) params.set("reason", filters.reason);
     if (filters.minConfidence > 0) params.set("min_confidence", String(filters.minConfidence));
     return getJson<{ groups: SummaryGroup[] }>(`/api/v1/summary?${params}`);
+  },
+  seasonalYieldSummary: (filters: Filters) => {
+    const params = new URLSearchParams({ season: filters.season });
+    if (filters.county) params.set("county", filters.county);
+    if (filters.label) params.set("label", filters.label.toLowerCase());
+    return getJson<SeasonalYieldSummary>(`/api/v1/summary/seasonal/yield?${params}`);
   },
   field: (fieldId: string, week: string) =>
     getJson<{ field: FieldDetail }>(

@@ -31,6 +31,9 @@ export type SeasonDefinition = {
   season_end: string;
   is_complete: boolean;
   method_version: string;
+  yield_available: boolean;
+  yield_run_id: string | null;
+  yield_method_version: string | null;
 };
 
 export type Prediction = {
@@ -81,6 +84,61 @@ export type SeasonalFieldDetail = {
   runner_up_confidence: number | null;
   confidence_margin: number | null;
   method_version: string;
+  yield_run_id: string | null;
+  yield_status: string | null;
+  yield_qa_flags: string | null;
+  yield_area_ha: number | null;
+  area_method: string | null;
+  intercrop_status: string | null;
+  survey_crop_text: string | null;
+  survey_crop_match: boolean | null;
+  sos: string | null;
+  peak_date: string | null;
+  eos: string | null;
+  phenology_method: string | null;
+  phenology_confidence: number | null;
+  phenology_qa_status: string | null;
+  optical_valid_weeks: number | null;
+  sar_supported_weeks: number | null;
+  seasonal_npp_gC_m2: number | null;
+  npp_temporal_coverage: number | null;
+  npp_mean_spatial_coverage: number | null;
+  npp_mean_effective_pixels: number | null;
+  tbp_tDM_ha: number | null;
+  yield_low_t_ha: number | null;
+  yield_central_t_ha: number | null;
+  yield_high_t_ha: number | null;
+  production_low_t: number | null;
+  production_central_t: number | null;
+  production_high_t: number | null;
+  phenology_narrow_central_yield_t_ha: number | null;
+  phenology_wide_central_yield_t_ha: number | null;
+  yield_parameter_set_id: string | null;
+  yield_method_version: string | null;
+};
+
+export type YieldSummaryGroup = {
+  county: string;
+  crop_label: string;
+  yield_status: string;
+  field_count: number;
+  calculated_fields: number;
+  yield_central_mean: number | null;
+  yield_central_median: number | null;
+  yield_central_min: number | null;
+  yield_central_max: number | null;
+  production_central_t: number | null;
+};
+
+export type SeasonalYieldSummary = {
+  model_run_id: string;
+  season: string;
+  yield_run: {
+    yield_run_id: string;
+    method_version: string;
+    parameter_set_id: string;
+  } | null;
+  groups: YieldSummaryGroup[];
 };
 
 export type SummaryGroup = {

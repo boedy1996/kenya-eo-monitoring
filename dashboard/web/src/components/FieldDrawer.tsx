@@ -12,6 +12,9 @@ const percentage = (value: number | null | undefined) =>
 const readable = (value: string | null | undefined) =>
   value ? value.replaceAll("_", " ") : "—";
 
+const decimal = (value: number | null | undefined, digits = 2) =>
+  value == null ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: digits });
+
 export function FieldDrawer({ fieldId, filters, onClose }: Props) {
   const isSeasonal = filters.mode === "seasonal";
   const weeklyDetail = useQuery({
@@ -129,6 +132,45 @@ export function FieldDrawer({ fieldId, filters, onClose }: Props) {
                   <div><dt>Runner-up crop</dt><dd>{readable(seasonalField.runner_up_label)}</dd></div>
                   <div><dt>Runner-up strength</dt><dd>{percentage(seasonalField.runner_up_confidence)}</dd></div>
                 </dl>
+              </section>
+              <section className="quality-card yield-detail-card">
+                <div className="section-title">
+                  <h3>Calculated yield</h3>
+                  <span>
+                    {seasonalField.yield_run_id
+                      ? readable(seasonalField.yield_status)
+                      : "Unavailable"}
+                  </span>
+                </div>
+                {seasonalField.yield_central_t_ha != null ? (
+                  <>
+                    <div className="yield-scenario">
+                      <div><span>Low</span><strong>{decimal(seasonalField.yield_low_t_ha)} t/ha</strong></div>
+                      <div className="central"><span>Central</span><strong>{decimal(seasonalField.yield_central_t_ha)} t/ha</strong></div>
+                      <div><span>High</span><strong>{decimal(seasonalField.yield_high_t_ha)} t/ha</strong></div>
+                    </div>
+                    <dl>
+                      <div><dt>Central production</dt><dd>{decimal(seasonalField.production_central_t, 1)} t</dd></div>
+                      <div><dt>Seasonal NPP</dt><dd>{decimal(seasonalField.seasonal_npp_gC_m2, 1)} gC/m²</dd></div>
+                      <div><dt>NPP temporal coverage</dt><dd>{percentage(seasonalField.npp_temporal_coverage)}</dd></div>
+                      <div><dt>NPP spatial coverage</dt><dd>{percentage(seasonalField.npp_mean_spatial_coverage)}</dd></div>
+                      <div><dt>Effective WaPOR pixels</dt><dd>{decimal(seasonalField.npp_mean_effective_pixels, 1)}</dd></div>
+                      <div><dt>Phenology</dt><dd>{seasonalField.sos} – {seasonalField.eos}</dd></div>
+                      <div><dt>Phenology method</dt><dd>{readable(seasonalField.phenology_method)}</dd></div>
+                      <div><dt>Intercrop status</dt><dd>{readable(seasonalField.intercrop_status)}</dd></div>
+                    </dl>
+                  </>
+                ) : seasonalField.yield_run_id ? (
+                  <div className="yield-unavailable">
+                    <strong>Yield was not calculated for this field.</strong>
+                    <span>{readable(seasonalField.yield_qa_flags)}</span>
+                  </div>
+                ) : (
+                  <div className="yield-unavailable">
+                    <strong>No validated yield result for this season.</strong>
+                  </div>
+                )}
+                <p className="yield-caveat">Unvalidated remote sensing estimate; no crop cut calibration.</p>
               </section>
             </>
           ) : weeklyField ? (

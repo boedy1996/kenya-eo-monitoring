@@ -108,3 +108,49 @@ async def seasonal_summary(
                 )
             ).fetchall()
     return {"model_run_id": run_id, "season": season, "groups": rows}
+
+
+@router.get("/summary/seasonal/yield")
+async def seasonal_yield_summary(
+    request: Request,
+    season: str,
+    model_run_id: str | None = None,
+    county: str | None = None,
+    label: str | None = None,
+    yield_status: str | None = None,
+) -> dict[str, object]:
+    async with request.app.state.db_pool.connection() as conn:
+        run_id = await active_model_run_id(conn, model_run_id)
+        yield_run = await (
+            await conn.execute(
+                """
+                SELECT yield_run_id, method_version, parameter_set_id
+                FROM dashboard.yield_runs
+                WHERE model_run_id = %s AND is_active
+                """,
+                (run_id,),
+            )
+        ).fetchone()
+        if not yield_run:
+            return {"model_run_id": run_id, "season": season, "yield_run": None, "groups": []}
+        clauses = ["yield_run_id = %s", "season_code = %s"]
+        params: list[object] = [yield_run["yield_run_id"], season]
+        for column, value in (("county", county), ("crop_label", label), ("yield_status", yield_status)):
+            if value:
+                clauses.append(f"{column} = %s")
+                params.append(value)
+        rows = await (
+            await conn.execute(
+                f"""
+                SELECT county, crop_label, yield_status, field_count,
+                       calculated_fields, yield_central_mean,
+                       yield_central_median, yield_central_min,
+                       yield_central_max, production_central_t
+                FROM dashboard.seasonal_yield_summary
+                WHERE {' AND '.join(clauses)}
+                ORDER BY county, crop_label, yield_status
+                """,
+                params,
+            )
+        ).fetchall()
+    return {"model_run_id": run_id, "season": season, "yield_run": yield_run, "groups": rows}
