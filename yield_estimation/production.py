@@ -320,17 +320,41 @@ def _clip_one(task: tuple[str, str, list[float], str, str]) -> dict[str, Any]:
         except Exception:
             output.unlink()
     temp = output.with_suffix(".tif.partial")
-    temp.unlink(missing_ok=True)
     xmin, ymin, xmax, ymax = bounds
     command = [
         "gdal_translate", "-q", "-projwin", str(xmin), str(ymax), str(xmax), str(ymin),
         "-of", "COG", "-co", "COMPRESS=ZSTD", "/vsicurl/" + url, str(temp),
     ]
     env = os.environ.copy()
-    env.update({"GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR", "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif"})
-    subprocess.run(command, check=True, env=env)
+    env.update(
+        {
+            "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+            "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif",
+            "GDAL_HTTP_MAX_RETRY": "4",
+            "GDAL_HTTP_RETRY_DELAY": "2",
+            "GDAL_HTTP_CONNECTTIMEOUT": "30",
+        }
+    )
+    last_error: subprocess.CalledProcessError | None = None
+    attempts = 4
+    for attempt in range(1, attempts + 1):
+        temp.unlink(missing_ok=True)
+        try:
+            subprocess.run(command, check=True, env=env)
+            last_error = None
+            break
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(2**attempt)
+    if last_error is not None:
+        temp.unlink(missing_ok=True)
+        raise RuntimeError(f"Clip failed after {attempts} attempts: {county} {code}") from last_error
     temp.replace(output)
-    return {"county": county, "code": code, "path": str(output), **validate_raster(output), "status": "created"}
+    return {
+        "county": county, "code": code, "path": str(output),
+        **validate_raster(output), "status": "created", "attempts": attempt,
+    }
 
 
 def clip(args: argparse.Namespace) -> None:
@@ -342,14 +366,26 @@ def clip(args: argparse.Namespace) -> None:
             output = args.run_dir / "rasters" / county / f"{row.code}.tif"
             tasks.append((county, row.code, county_bounds, row.url, str(output)))
     records = []
+    failures = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {executor.submit(_clip_one, task): task for task in tasks}
         for number, future in enumerate(concurrent.futures.as_completed(futures), 1):
-            result = future.result()
-            records.append(result)
-            log(f"Clip {number}/{len(tasks)} {result['county']} {result['code']} {result['status']}")
+            try:
+                result = future.result()
+                records.append(result)
+                log(
+                    f"Clip {number}/{len(tasks)} {result['county']} "
+                    f"{result['code']} {result['status']} attempts={result.get('attempts', 0)}"
+                )
+            except Exception as exc:
+                task = futures[future]
+                failures.append({"county": task[0], "code": task[1], "error": str(exc)})
+                log(f"Clip {number}/{len(tasks)} {task[0]} {task[1]} failed: {exc}")
     frame = pd.DataFrame(records).sort_values(["county", "code"])
     frame.to_parquet(args.run_dir / "inventory" / "clipped_rasters.parquet", index=False)
+    write_json(args.run_dir / "inventory" / "clip_failures.json", failures)
+    if failures:
+        raise RuntimeError(f"{len(failures)} raster clips failed; rerun the resumable clip stage")
     log(f"Clipped and validated {len(frame):,} county-period rasters")
 
 
