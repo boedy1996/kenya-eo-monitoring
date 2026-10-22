@@ -335,15 +335,15 @@ def _clip_one(task: tuple[str, str, list[float], str, str]) -> dict[str, Any]:
             "GDAL_HTTP_CONNECTTIMEOUT": "30",
         }
     )
-    last_error: subprocess.CalledProcessError | None = None
+    last_error: subprocess.SubprocessError | None = None
     attempts = 4
     for attempt in range(1, attempts + 1):
         temp.unlink(missing_ok=True)
         try:
-            subprocess.run(command, check=True, env=env)
+            subprocess.run(command, check=True, env=env, timeout=180)
             last_error = None
             break
-        except subprocess.CalledProcessError as exc:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             last_error = exc
             if attempt < attempts:
                 time.sleep(2**attempt)
