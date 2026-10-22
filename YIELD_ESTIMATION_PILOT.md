@@ -12,6 +12,10 @@ radiation, rainfall, temperature, AETI, or Earth Engine during production.
 - Phenology: existing weekly S2 NDVI/EVI/LAI with S1 RVI support
 - Biomass: WaPOR v3 `L2-NPP-D`, read as HTTP range requests and clipped to the
   selected field extents
+- WaPOR scaling: `exactextract` receives GDAL-scaled physical values; the
+  stored-DN equivalent is reconstructed only as an audit column
+- Field area: use the database area when present and a geometry-derived
+  EPSG:6933 equal-area value when the database value is missing
 - Output status: `calculated_unvalidated`
 
 The database is read only. All outputs are written below

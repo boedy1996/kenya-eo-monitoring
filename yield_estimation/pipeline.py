@@ -198,6 +198,24 @@ def survey_crop_matches(predicted_crop: str, survey_crop_text: Any) -> bool | No
     return any(alias in normalized.split() for alias in aliases.get(predicted_crop, (predicted_crop,)))
 
 
+def decode_exactextract_mean(
+    scaled_mean: pd.Series,
+    scale: float,
+    offset: float,
+) -> tuple[pd.Series, pd.Series]:
+    """Return the stored-DN equivalent and physical value from exactextract.
+
+    exactextract reads through GDAL and applies a raster band's scale and
+    offset before calculating its mean.  Keep the physical mean as the NPP
+    rate and reconstruct the stored-DN equivalent only for audit output.
+    """
+    physical = pd.to_numeric(scaled_mean, errors="coerce")
+    if not np.isfinite(scale) or scale == 0:
+        raise ValueError(f"Invalid raster scale: {scale}")
+    raw_equivalent = (physical - offset) / scale
+    return raw_equivalent, physical
+
+
 def read_survey_intercrop(gpkg: Path, field_ids: list[str], season_kind: str) -> pd.DataFrame:
     if not gpkg.exists():
         return pd.DataFrame(columns=["field_id", "intercrop_status"])
@@ -276,6 +294,15 @@ def prepare(args: argparse.Namespace) -> None:
     missing = sorted(set(field_ids) - set(fields["field_id"]))
     if missing:
         raise RuntimeError(f"{len(missing)} requested field IDs are absent; first: {missing[:10]}")
+    source_area = pd.to_numeric(fields["area_ha"], errors="coerce")
+    geometry_area = fields.to_crs(6933).geometry.area / 10_000.0
+    valid_source_area = source_area.notna() & np.isfinite(source_area) & (source_area > 0)
+    fields["source_area_ha"] = source_area
+    fields["geometry_area_ha"] = geometry_area
+    fields["area_ha"] = source_area.where(valid_source_area, geometry_area)
+    fields["area_method"] = np.where(valid_source_area, "database", "geometry_epsg6933")
+    if fields["area_ha"].isna().any() or (fields["area_ha"] <= 0).any():
+        raise RuntimeError("Unable to resolve a positive area for every requested field")
     season_kind = args.season_code.split("_", 1)[1].lower()
     survey = read_survey_intercrop(args.gpkg, field_ids, season_kind) if args.gpkg else pd.DataFrame()
     fields["intercrop_status"] = "unknown"
@@ -509,14 +536,10 @@ def extract_npp(args: argparse.Namespace) -> None:
                 output="pandas",
                 strategy="feature-sequential",
             )
-            result = result.rename(
-                columns={
-                    "mean": "npp_raw_mean",
-                    "valid_coverage_fraction": "coverage_fraction",
-                }
-            )
-            result["npp_rate_gC_m2_day"] = result["npp_raw_mean"] * scale + offset
-            result.loc[result["npp_raw_mean"].isna(), "npp_rate_gC_m2_day"] = np.nan
+            result = result.rename(columns={"valid_coverage_fraction": "coverage_fraction"})
+            raw_equivalent, physical = decode_exactextract_mean(result.pop("mean"), scale, offset)
+            result["npp_raw_mean"] = raw_equivalent
+            result["npp_rate_gC_m2_day"] = physical
             result["period_start"] = meta.period_start
             result["period_end"] = meta.period_end
             result["days_in_period"] = int(meta.days_in_period)
@@ -681,7 +704,7 @@ def calculate(args: argparse.Namespace) -> None:
             yield_central_median=("yield_central_t_ha", "median"),
             yield_central_min=("yield_central_t_ha", "min"),
             yield_central_max=("yield_central_t_ha", "max"),
-            production_central_t=("production_central_t", "sum"),
+            production_central_t=("production_central_t", lambda values: values.sum(min_count=1)),
             mean_npp_coverage=("npp_temporal_coverage", "mean"),
         )
         .reset_index()
@@ -715,8 +738,12 @@ def validate(args: argparse.Namespace) -> None:
         )
         if order_bad.any():
             failures.append("low/central/high yield ordering failure")
-        expected_production = calculated["yield_central_t_ha"] * calculated["area_ha"]
-        if not np.allclose(expected_production, calculated["production_central_t"], rtol=1e-7):
+        bad_area = calculated["area_ha"].isna() | (calculated["area_ha"] <= 0)
+        if bad_area.any():
+            failures.append(f"calculated fields with invalid area: {int(bad_area.sum())}")
+        comparable = calculated.loc[~bad_area]
+        expected_production = comparable["yield_central_t_ha"] * comparable["area_ha"]
+        if not np.allclose(expected_production, comparable["production_central_t"], rtol=1e-7):
             failures.append("production does not equal yield times area")
     report = {
         "run_id": args.run_dir.name,
