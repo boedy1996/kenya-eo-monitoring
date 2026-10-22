@@ -47,6 +47,13 @@ DATABASE_COLUMN_OVERRIDES = {
     "seasonal_npp_gC_m2": "seasonal_npp_gc_m2",
     "tbp_tDM_ha": "tbp_tdm_ha",
 }
+SMALLINT_COLUMNS = {
+    "optical_valid_weeks",
+    "sar_supported_weeks",
+    "npp_valid_days",
+    "npp_total_days",
+    "npp_periods_used",
+}
 
 
 def log(message: str) -> None:
@@ -106,7 +113,14 @@ def read_run(args: argparse.Namespace) -> tuple[dict[str, Any], list[Path], int]
 
 
 def parquet_to_csv(path: Path, csv_path: Path) -> None:
-    selections = ", ".join(f'"{column}"' for column in YIELD_COLUMNS)
+    selections = ", ".join(
+        (
+            f'CAST("{column}" AS SMALLINT) AS "{column}"'
+            if column in SMALLINT_COLUMNS
+            else f'"{column}"'
+        )
+        for column in YIELD_COLUMNS
+    )
     duck = duckdb.connect()
     try:
         duck.execute("SET threads = 4")
