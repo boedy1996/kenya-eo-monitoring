@@ -130,6 +130,28 @@ export type YieldSummaryGroup = {
   production_central_t: number | null;
 };
 
+export type SeasonalYieldAggregate = {
+  county: string;
+  crop_label: string;
+  calculated_fields: number;
+  calculated_unvalidated_fields: number;
+  intercrop_unknown_fields: number;
+  mapped_area_ha: number;
+  yield_central_mean: number | null;
+  yield_central_median: number | null;
+  yield_central_min: number | null;
+  yield_central_max: number | null;
+  production_low_t: number | null;
+  production_central_t: number | null;
+  production_high_t: number | null;
+  yield_low_area_weighted: number | null;
+  yield_central_area_weighted: number | null;
+  yield_high_area_weighted: number | null;
+  aggregation_method_version: string;
+  aggregation_code_commit: string;
+  aggregation_built_at: string;
+};
+
 export type SeasonalYieldSummary = {
   model_run_id: string;
   season: string;
@@ -138,6 +160,14 @@ export type SeasonalYieldSummary = {
     method_version: string;
     parameter_set_id: string;
   } | null;
+  aggregation: {
+    method_version: string;
+    code_commit: string;
+    built_at: string;
+    scope: string;
+    formula: string;
+  } | null;
+  aggregates: SeasonalYieldAggregate[];
   groups: YieldSummaryGroup[];
 };
 

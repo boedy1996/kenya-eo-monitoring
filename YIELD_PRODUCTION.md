@@ -25,7 +25,10 @@ reason.
    crop yield scenarios.
 7. Validate every seasonal Parquet and load all results into PostGIS with a
    resumable checkpoint per season.
-8. Activate the yield run only after database validation succeeds.
+8. Build the versioned canonical county aggregation as total production divided
+   by total mapped field area for every county, crop and season.
+9. Activate the yield run only after field and county-level database validation
+   succeeds.
 
 ## Server commands
 
@@ -91,6 +94,22 @@ The loader writes its database validation report under
 `/opt/kenya-dashboard/load-tmp/`. Restart the API after the new application
 release is active, then select **Seasonal** in the dashboard. Complete seasons
 show the yield availability indicator, season summary and field-level result.
+
+The canonical aggregation is versioned as
+`county-yield-area-weighted-v1`. Plain mean and median remain available as
+diagnostic statistics but are not the official-comparison metric.
+
+Export the complete county × crop × season series when required:
+
+```bash
+sudo -u postgres env \
+  DATABASE_URL='postgresql:///kenya_monitoring?host=/var/run/postgresql' \
+  /opt/kenya-dashboard/venv/bin/python \
+  /opt/kenya-dashboard/current/dashboard/scripts/export_yield_aggregation.py \
+  --yield-run-id "$RUN_ID" \
+  --expected-seasons 16 \
+  --output-dir "/opt/project/yield_runs/${RUN_ID}/exports/county-series"
+```
 
 ## Monitoring and resume
 

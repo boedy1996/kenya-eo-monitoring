@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -54,11 +55,23 @@ SMALLINT_COLUMNS = {
     "npp_total_days",
     "npp_periods_used",
 }
+AGGREGATION_METHOD_VERSION = "county-yield-area-weighted-v1"
 
 
 def log(message: str) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     print(f"[{stamp}] {message}", flush=True)
+
+
+def repository_commit() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return completed.stdout.strip() or "unknown"
 
 
 def database_url() -> str:
@@ -274,10 +287,54 @@ def load_outputs(
 
 def build_summary(conn: psycopg.Connection, yield_run_id: str) -> None:
     log("Building seasonal yield summary")
+    aggregation_commit = repository_commit()
     with conn.transaction():
         conn.execute(
             "DELETE FROM dashboard.seasonal_yield_summary WHERE yield_run_id = %s",
             (yield_run_id,),
+        )
+        conn.execute(
+            "DELETE FROM dashboard.seasonal_yield_county_summary WHERE yield_run_id = %s",
+            (yield_run_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO dashboard.seasonal_yield_county_summary(
+                yield_run_id, model_run_id, season_code, county, crop_label,
+                calculated_fields, calculated_unvalidated_fields,
+                intercrop_unknown_fields, mapped_area_ha,
+                yield_central_mean, yield_central_median,
+                yield_central_min, yield_central_max,
+                production_low_t, production_central_t, production_high_t,
+                yield_low_area_weighted, yield_central_area_weighted,
+                yield_high_area_weighted, aggregation_method_version,
+                aggregation_code_commit, aggregation_built_at
+            )
+            SELECT yield_run_id, model_run_id, season_code, county, crop_label,
+                   count(*)::integer,
+                   count(*) FILTER (
+                       WHERE yield_status = 'calculated_unvalidated'
+                   )::integer,
+                   count(*) FILTER (
+                       WHERE yield_status = 'calculated_unvalidated_intercrop_unknown'
+                   )::integer,
+                   sum(area_ha),
+                   avg(yield_central_t_ha),
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY yield_central_t_ha),
+                   min(yield_central_t_ha), max(yield_central_t_ha),
+                   sum(production_low_t), sum(production_central_t),
+                   sum(production_high_t),
+                   sum(production_low_t) / nullif(sum(area_ha), 0),
+                   sum(production_central_t) / nullif(sum(area_ha), 0),
+                   sum(production_high_t) / nullif(sum(area_ha), 0),
+                   %s, %s, now()
+            FROM dashboard.seasonal_yield
+            WHERE yield_run_id = %s
+              AND yield_central_t_ha IS NOT NULL
+              AND area_ha > 0
+            GROUP BY yield_run_id, model_run_id, season_code, county, crop_label
+            """,
+            (AGGREGATION_METHOD_VERSION, aggregation_commit, yield_run_id),
         )
         conn.execute(
             """
@@ -337,6 +394,19 @@ def validate_and_activate(
         "SELECT count(*) FROM dashboard.seasonal_yield_summary WHERE yield_run_id = %s",
         (run_id,),
     ).fetchone()[0]
+    county_summary = conn.execute(
+        """
+        SELECT count(*)::integer,
+               count(DISTINCT season_code)::integer,
+               coalesce(max(abs(
+                   yield_central_area_weighted
+                   - production_central_t / nullif(mapped_area_ha, 0)
+               )), 0)
+        FROM dashboard.seasonal_yield_county_summary
+        WHERE yield_run_id = %s
+        """,
+        (run_id,),
+    ).fetchone()
     failures: list[str] = []
     expected_fields = int(manifest["field_count"])
     checks = {
@@ -353,6 +423,17 @@ def validate_and_activate(
         failures.append(f"yield scenario order failed for {int(metrics[4]):,} rows")
     if not summary_groups:
         failures.append("yield summary is empty")
+    if not int(county_summary[0]):
+        failures.append("canonical county yield summary is empty")
+    if int(county_summary[1]) != len(files):
+        failures.append(
+            f"canonical summary seasons={int(county_summary[1])}; expected={len(files)}"
+        )
+    if float(county_summary[2]) > 1e-10:
+        failures.append(
+            "canonical area-weighted reconciliation failed: "
+            f"difference={float(county_summary[2])}"
+        )
     report = {
         "yield_run_id": run_id,
         "model_run_id": manifest["model_run_id"],
@@ -360,6 +441,11 @@ def validate_and_activate(
             "rows": int(metrics[0]), "fields": int(metrics[1]),
             "seasons": int(metrics[2]), "calculated_rows": int(metrics[3]),
             "summary_groups": int(summary_groups),
+            "canonical_summary_groups": int(county_summary[0]),
+            "canonical_summary_seasons": int(county_summary[1]),
+            "canonical_maximum_reconciliation_difference": float(county_summary[2]),
+            "aggregation_method_version": AGGREGATION_METHOD_VERSION,
+            "aggregation_code_commit": repository_commit(),
             "checkpoint_files": int(checkpoints[0]),
             "checkpoint_rows": int(checkpoints[1]),
         },

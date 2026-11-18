@@ -153,4 +153,48 @@ async def seasonal_yield_summary(
                 params,
             )
         ).fetchall()
-    return {"model_run_id": run_id, "season": season, "yield_run": yield_run, "groups": rows}
+        aggregate_clauses = ["yield_run_id = %s", "season_code = %s"]
+        aggregate_params: list[object] = [yield_run["yield_run_id"], season]
+        for column, value in (("county", county), ("crop_label", label)):
+            if value:
+                aggregate_clauses.append(f"{column} = %s")
+                aggregate_params.append(value)
+        aggregates = await (
+            await conn.execute(
+                f"""
+                SELECT county, crop_label, calculated_fields,
+                       calculated_unvalidated_fields, intercrop_unknown_fields,
+                       mapped_area_ha, yield_central_mean,
+                       yield_central_median, yield_central_min,
+                       yield_central_max, production_low_t,
+                       production_central_t, production_high_t,
+                       yield_low_area_weighted,
+                       yield_central_area_weighted,
+                       yield_high_area_weighted,
+                       aggregation_method_version,
+                       aggregation_code_commit, aggregation_built_at
+                FROM dashboard.seasonal_yield_county_summary
+                WHERE {' AND '.join(aggregate_clauses)}
+                ORDER BY county, crop_label
+                """,
+                aggregate_params,
+            )
+        ).fetchall()
+        aggregation = None
+        if aggregates:
+            first = aggregates[0]
+            aggregation = {
+                "method_version": first["aggregation_method_version"],
+                "code_commit": first["aggregation_code_commit"],
+                "built_at": first["aggregation_built_at"],
+                "scope": "calculated fields with positive mapped area",
+                "formula": "sum(production) / sum(mapped field area)",
+            }
+    return {
+        "model_run_id": run_id,
+        "season": season,
+        "yield_run": yield_run,
+        "aggregation": aggregation,
+        "aggregates": aggregates,
+        "groups": rows,
+    }

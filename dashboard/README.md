@@ -90,3 +90,19 @@ that extend beyond the model-run coverage are marked `provisional`.
 
 The displayed value is model confidence within the pilot classes. It is not a
 measured accuracy score.
+
+## Seasonal yield aggregation
+
+The canonical county yield is computed once in the loader for each county,
+crop and season:
+
+```text
+sum(central field production) / sum(mapped field area)
+```
+
+Only rows with a calculated central yield and positive field area are included.
+The result is stored in `dashboard.seasonal_yield_county_summary` with the
+aggregation method version, application commit and build time. The seasonal
+yield API exposes this canonical series in `aggregates`; the legacy `groups`
+array retains plain mean and median statistics split by yield status for audit
+purposes. The dashboard displays the canonical area-weighted value.
