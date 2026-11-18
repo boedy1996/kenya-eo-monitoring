@@ -46,8 +46,21 @@ def repository_commit() -> str:
     return completed.stdout.strip() or "unknown"
 
 
-def aggregation_query() -> str:
-    return """
+def area_threshold_token(minimum_field_area_ha: float) -> str:
+    return format(minimum_field_area_ha, "g").replace(".", "p")
+
+
+def aggregation_method_version(minimum_field_area_ha: float | None) -> str:
+    if minimum_field_area_ha is None:
+        return AGGREGATION_METHOD_VERSION
+    return (
+        "county-yield-area-weighted-min-"
+        f"{area_threshold_token(minimum_field_area_ha)}ha-v1"
+    )
+
+
+def aggregation_query(minimum_field_area_ha: float | None = None) -> str:
+    query = """
         SELECT
             y.yield_run_id,
             y.model_run_id,
@@ -93,6 +106,13 @@ def aggregation_query() -> str:
                  y.county, y.crop_label
         ORDER BY d.season_start, y.county, y.crop_label
     """
+    if minimum_field_area_ha is not None:
+        query = query.replace(
+            "          AND y.area_ha > 0\n",
+            "          AND y.area_ha > 0\n"
+            "          AND y.area_ha >= %(minimum_field_area_ha)s\n",
+        )
+    return query
 
 
 def validate_export(rows: list[dict[str, object]], expected_seasons: int) -> dict[str, object]:
@@ -147,21 +167,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--expected-seasons", type=int, default=16)
     parser.add_argument("--aggregation-code-commit")
+    parser.add_argument(
+        "--minimum-field-area-ha",
+        type=float,
+        help=(
+            "Restrict the export to fields at or above this canonical area. "
+            "The threshold is encoded in the output name and aggregation version."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    query = aggregation_query()
+    if args.minimum_field_area_ha is not None and args.minimum_field_area_ha <= 0:
+        raise ValueError("--minimum-field-area-ha must be greater than zero")
+    query = aggregation_query(args.minimum_field_area_ha)
+    query_params: dict[str, object] = {"yield_run_id": args.yield_run_id}
+    if args.minimum_field_area_ha is not None:
+        query_params["minimum_field_area_ha"] = args.minimum_field_area_ha
     with psycopg.connect(database_url(), row_factory=dict_row) as conn:
-        records = [dict(row) for row in conn.execute(
-            query, {"yield_run_id": args.yield_run_id}
-        ).fetchall()]
+        records = [
+            dict(row) for row in conn.execute(query, query_params).fetchall()
+        ]
     built_at = datetime.now(timezone.utc).isoformat()
     commit = args.aggregation_code_commit or repository_commit()
-    query_hash = hashlib.sha256(query.encode()).hexdigest()
+    method_version = aggregation_method_version(args.minimum_field_area_ha)
+    query_fingerprint = query
+    if args.minimum_field_area_ha is not None:
+        query_fingerprint += (
+            "\nminimum_field_area_ha="
+            f"{format(args.minimum_field_area_ha, 'g')}"
+        )
+    query_hash = hashlib.sha256(query_fingerprint.encode()).hexdigest()
     for record in records:
-        record["aggregation_method_version"] = AGGREGATION_METHOD_VERSION
+        record["aggregation_method_version"] = method_version
         record["aggregation_code_commit"] = commit
         record["aggregation_query_sha256"] = query_hash
         record["aggregation_built_at"] = built_at
@@ -170,6 +210,8 @@ def main() -> None:
         raise RuntimeError(f"Aggregation validation failed: {report['failures']}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{args.yield_run_id}_county_crop_season_area_weighted"
+    if args.minimum_field_area_ha is not None:
+        stem += f"_min_{area_threshold_token(args.minimum_field_area_ha)}ha"
     csv_path = args.output_dir / f"{stem}.csv"
     parquet_path = args.output_dir / f"{stem}.parquet"
     manifest_path = args.output_dir / f"{stem}.manifest.json"
@@ -178,11 +220,17 @@ def main() -> None:
     pq.write_table(table, parquet_path, compression="zstd")
     manifest = {
         "yield_run_id": args.yield_run_id,
-        "aggregation_method_version": AGGREGATION_METHOD_VERSION,
+        "aggregation_method_version": method_version,
         "aggregation_code_commit": commit,
         "aggregation_query_sha256": query_hash,
         "aggregation_built_at": built_at,
-        "scope": "Rows with non-null central yield and positive field area",
+        "scope": (
+            "Rows with non-null central yield and field area at or above "
+            f"{format(args.minimum_field_area_ha, 'g')} ha"
+            if args.minimum_field_area_ha is not None
+            else "Rows with non-null central yield and positive field area"
+        ),
+        "minimum_field_area_ha": args.minimum_field_area_ha,
         "formula": "sum(production) / sum(mapped field area)",
         "validation": report,
         "files": [csv_path.name, parquet_path.name],
