@@ -64,9 +64,16 @@ def log(message: str) -> None:
 
 
 def repository_commit() -> str:
+    repository_root = Path(__file__).resolve().parents[2]
     completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=Path(__file__).resolve().parents[2],
+        [
+            "git",
+            "-c",
+            f"safe.directory={repository_root}",
+            "rev-parse",
+            "HEAD",
+        ],
+        cwd=repository_root,
         text=True,
         capture_output=True,
         check=False,
